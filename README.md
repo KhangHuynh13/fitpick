@@ -3,7 +3,7 @@
 Web app quản lý tủ quần áo, dạng PWA dùng trên điện thoại (iPhone và Android).
 Mỗi người tự lưu tủ đồ **trên máy mình** (IndexedDB) — không có server, không có tài khoản.
 
-Yêu cầu đầy đủ và lộ trình 3 giai đoạn: xem [SPEC.md](SPEC.md). Hiện đã làm xong **giai đoạn 1 và 2** (phiên bản 1.1, `CACHE_VERSION = 'v2'`).
+Yêu cầu đầy đủ và lộ trình 3 giai đoạn: xem [SPEC.md](SPEC.md). Hiện đã làm xong **giai đoạn 1 và 2** (phiên bản 1.1.1, `CACHE_VERSION = 'v3'`).
 
 ---
 
@@ -68,14 +68,14 @@ Service worker (`sw.js`) lưu sẵn file của app để chạy offline. Mỗi l
 
 1. Mở `sw.js`, tăng số phiên bản:
    ```js
-   const CACHE_VERSION = 'v3';   // trước đó là 'v2'
+   const CACHE_VERSION = 'v4';   // trước đó là 'v3'
    ```
 2. Nếu thêm file mới, thêm đường dẫn vào mảng `APP_FILES` trong `sw.js`.
 3. Đẩy lên GitHub.
 
 Điều gì xảy ra với bạn bè:
 - File HTML luôn lấy từ mạng trước (network-first) nên trình duyệt thấy ngay `sw.js` mới.
-- Service worker mới tải toàn bộ file vào cache `fitpick-v3`, xóa cache cũ `fitpick-v2`.
+- Service worker mới tải toàn bộ file vào cache `fitpick-v4`, xóa cache cũ `fitpick-v3`.
 - App hiện thông báo **"Đã có bản Fitpick mới · Tải lại"**. Bấm là dùng bản mới. Dữ liệu tủ đồ không bị ảnh hưởng.
 
 Quên tăng `CACHE_VERSION` thì bạn bè vẫn dùng CSS/JS cũ đã lưu trong máy.
@@ -85,7 +85,7 @@ Nếu đổi version hiển thị trong Cài đặt, sửa `APP_VERSION` trong `
 ### Dữ liệu của người dùng khi cập nhật
 
 - Tủ đồ nằm trong **IndexedDB**, tách biệt hoàn toàn với cache của service worker. Tăng `CACHE_VERSION` chỉ thay file của app, **không** đụng tới dữ liệu.
-- Chỉ khi đổi cấu trúc database mới cần tăng `DB_VERSION` trong `db.js` (xem mục "Nâng cấp database" bên dưới). Bản 1.1 không đổi cấu trúc, vẫn `DB_VERSION = 1`.
+- Chỉ khi đổi cấu trúc database mới cần tăng `DB_VERSION` trong `db.js` (xem mục "Nâng cấp database" bên dưới). Bản 1.1 và 1.1.1 không đổi cấu trúc, vẫn `DB_VERSION = 1`.
 - Không bao giờ đổi tên database (`fitpick`) hay xóa store — làm vậy là mất dữ liệu của bạn bè.
 
 Lịch sử phiên bản:
@@ -94,6 +94,22 @@ Lịch sử phiên bản:
 |---|---|---|---|
 | 1.0 | v1 | 1 | Giai đoạn 1: Tủ đồ, món đồ, Mặc hôm nay, Cài đặt, sao lưu |
 | 1.1 | v2 | 1 | Giai đoạn 2: tab Outfit; ảnh trong suốt có nền kem |
+| 1.1.1 | v3 | 1 | Sửa 2 lỗi trên iPhone (Safari) — xem bên dưới |
+
+#### Bản 1.1.1 — hai lỗi trên iPhone và cách sửa
+
+> Hai lỗi này chỉ xảy ra trên Safari/iPhone (WebKit). Nguyên nhân dưới đây được suy ra từ code và ảnh chụp màn hình, **chưa tái hiện được trên Safari** (Safari trên Mac chưa cho điều khiển tự động). Bản sửa đã được kiểm tra trên Chrome bằng cách giả lập đúng hai tình huống lỗi.
+
+**Lỗi 1 — Ảnh món đồ thành dấu "?" sau khi bấm "Hôm nay mặc bộ này".**
+- *Nguyên nhân:* trên Safari, ảnh (Blob) đọc từ IndexedDB trỏ tới một file trên đĩa. Khi món đồ được ghi lại (đổi số lần mặc), Safari thay file đó; URL ảnh tạo từ Blob cũ — được giữ trong bộ nhớ đệm theo id — không còn đọc được. Mở lại app thì URL được tạo mới nên ảnh hiện lại; dữ liệu không hỏng.
+- *Cách sửa (`image.js`, `app.js`, `db.js`):* vẫn giữ Blob và cache URL theo id món. Sau mỗi lần ghi một món, cache đánh dấu "cần làm mới" để lần vẽ tới tạo URL mới. URL cũ không bị revoke khi có thể đang hiển thị, chỉ revoke khi xóa món hoặc đổi ảnh. Thêm dự phòng: ảnh nào lỗi tải thì đọc lại món từ database và tạo URL mới một lần; vẫn lỗi thì hiện hình minh họa theo loại đồ, không bao giờ hiện "?".
+
+**Lỗi 2 — Bấm "Hôm nay mặc bộ này" rồi bấm ngay "Đã mặc hôm nay" thì báo "Không bỏ đánh dấu được".**
+- *Nguyên nhân:* bỏ đánh dấu phải ghi lại các món đồ cùng ảnh của chúng. Ngay sau lần ghi trước, Safari có thể chưa ghi xong file ảnh mới, nên lần ghi thứ hai lỗi (`UnknownError`); đợi vài giây thì được. Ngoài ra thanh Hoàn tác và nút bấm lại là hai đường hoàn tác có thể chạy chồng lên nhau, và thông báo lỗi chỉ ghi chung chung.
+- *Cách sửa:*
+  - `db.js`: trước khi ghi lại món đồ, đọc ảnh vào bộ nhớ thành Blob mới rồi mới ghi (giống lúc thêm món mới); gặp lỗi tạm thời thì tự thử lại 1 lần sau 400 ms. Áp dụng cho: Mặc hôm nay / bỏ đánh dấu (món và outfit), sửa món, xóa danh mục.
+  - `app.js`: mỗi món/outfit có khóa riêng — Hoàn tác, nút bấm lại và bấm đúp không thể chạy cùng lúc. Bấm "Đã mặc hôm nay" khi thanh Hoàn tác còn hiện thì thanh đó đóng lại rồi mới hỏi xác nhận. Bỏ đánh dấu khi đã bỏ rồi thì không báo lỗi.
+  - Thông báo lỗi ghi lý do cụ thể (chi tiết kỹ thuật ở console), hiện ở phía trên màn hình và không chặn bấm vào các nút bên dưới.
 
 ---
 

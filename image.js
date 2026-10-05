@@ -84,34 +84,65 @@ const ImageTools = (() => {
     return new Blob([bytes], { type: m[1] || 'image/jpeg' });
   }
 
-  /* Bộ nhớ đệm object URL cho ảnh món đồ, tránh tạo lại mỗi lần vẽ màn hình. */
-  const urlCache = new Map();
-
-  /**
-   * Lấy URL hiển thị cho ảnh của món đồ (tạo một lần, dùng lại).
-   * Khi món đổi ảnh hoặc bị xóa, gọi forgetItemImage() để tạo lại.
+  /*
+   * Bộ nhớ đệm object URL cho ảnh món đồ, theo id món: id → { url, old: [url cũ] }.
+   *
+   * Vì sao cần "làm mới": trên Safari/iPhone, Blob đọc từ IndexedDB trỏ tới một file trên đĩa.
+   * Khi bản ghi món đồ được ghi lại (ví dụ "Mặc hôm nay" đổi wearCount), Safari thay file đó,
+   * nên URL tạo từ Blob cũ không còn đọc được → hiện dấu "?". Vì vậy sau mỗi lần ghi một món,
+   * markStale() đánh dấu để lần vẽ tới tạo URL mới từ Blob vừa đọc lại.
+   *
+   * URL cũ KHÔNG bị revoke ngay (có thể ảnh vẫn đang hiển thị); chỉ revoke khi món bị xóa
+   * hoặc đổi ảnh (forgetItemImage) hoặc khi nhập bản sao lưu (forgetAllImages).
    */
-  function itemImageURL(item) {
-    if (!item || !item.imageBlob) return null;
-    let url = urlCache.get(item.id);
-    if (!url) {
-      url = URL.createObjectURL(item.imageBlob);
-      urlCache.set(item.id, url);
-    }
-    return url;
+  const urlCache = new Map();
+  const stale = new Set();
+
+  /** Tạo URL mới cho món, giữ URL cũ lại để revoke sau. */
+  function setURL(id, blob) {
+    const entry = urlCache.get(id) || { url: null, old: [] };
+    if (entry.url) entry.old.push(entry.url);
+    entry.url = URL.createObjectURL(blob);
+    urlCache.set(id, entry);
+    stale.delete(id);
+    return entry.url;
   }
 
-  /** Giải phóng URL của món đồ đã xóa/đổi ảnh. */
+  /** Lấy URL hiển thị cho ảnh của món đồ (dùng lại URL đã tạo nếu còn mới). */
+  function itemImageURL(item) {
+    if (!item || !item.imageBlob) return null;
+    const entry = urlCache.get(item.id);
+    if (entry && entry.url && !stale.has(item.id)) return entry.url;
+    return setURL(item.id, item.imageBlob);
+  }
+
+  /** Đánh dấu các món vừa được ghi lại: lần vẽ tới sẽ tạo URL mới cho chúng. */
+  function markStale(ids) {
+    (ids || []).forEach((id) => { if (urlCache.has(id)) stale.add(id); });
+  }
+
+  /** Tạo lại URL từ Blob mới đọc (dùng khi ảnh báo lỗi tải). */
+  function renewItemImage(id, blob) {
+    return blob ? setURL(id, blob) : null;
+  }
+
+  /** Giải phóng mọi URL của món đồ đã xóa/đổi ảnh. */
   function forgetItemImage(id) {
-    const url = urlCache.get(id);
-    if (url) { URL.revokeObjectURL(url); urlCache.delete(id); }
+    const entry = urlCache.get(id);
+    if (entry) {
+      [entry.url, ...entry.old].forEach((u) => u && URL.revokeObjectURL(u));
+      urlCache.delete(id);
+    }
+    stale.delete(id);
   }
 
   /** Giải phóng toàn bộ URL (sau khi nhập bản sao lưu). */
   function forgetAllImages() {
-    urlCache.forEach((url) => URL.revokeObjectURL(url));
-    urlCache.clear();
+    [...urlCache.keys()].forEach(forgetItemImage);
   }
 
-  return { processPhoto, blobToDataURL, dataURLToBlob, itemImageURL, forgetItemImage, forgetAllImages };
+  return {
+    processPhoto, blobToDataURL, dataURLToBlob,
+    itemImageURL, markStale, renewItemImage, forgetItemImage, forgetAllImages
+  };
 })();

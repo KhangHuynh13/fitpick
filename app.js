@@ -8,7 +8,7 @@
 
 /* ============================ Hằng số ============================ */
 
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.1.1';
 
 // Nhóm loại đồ ở màn Tạo/Sửa outfit (theo thiết kế: Áo · Quần/Váy · Giày · Phụ kiện)
 const OUTFIT_GROUPS = [
@@ -154,15 +154,57 @@ function wearLabel(item) {
  * HTML ảnh món đồ. Nếu chưa có ảnh thì vẽ hình minh họa theo loại, tô theo màu.
  */
 function thumbHTML(item, { blob, url } = {}) {
-  const src = url || (blob === undefined ? ImageTools.itemImageURL(item) : null);
+  const fromCache = !url && blob === undefined;
+  const src = url || (fromCache ? ImageTools.itemImageURL(item) : null);
   if (src) {
-    return `<div class="thumb"><img src="${esc(src)}" alt="" loading="lazy" decoding="async"></div>`;
+    // data-item-id: để onImageError() biết ảnh của món nào khi ảnh không tải được
+    const idAttr = item.id ? ` data-item-id="${esc(item.id)}"` : '';
+    return `<div class="thumb"><img src="${esc(src)}" alt=""${idAttr} loading="lazy" decoding="async"></div>`;
   }
+  return glyphHTML(item);
+}
+
+/** Hình minh họa theo loại đồ, tô theo màu (khi món chưa có ảnh hoặc ảnh lỗi). */
+function glyphHTML(item) {
   const g = GLYPHS[item.type] || GLYPHS['Áo'];
   const bg = LIGHT_COLORS.includes(item.color) ? '#DED7CA' : '#E7E1D7';
   return `<div class="thumb" style="background:${bg}"><svg viewBox="0 0 100 100" aria-hidden="true">` +
     `<path d="${g.p}" fill="${colorHex(item.color)}" stroke="rgba(31,29,26,0.22)" stroke-width="1.2" stroke-linejoin="round"/>` +
     `<path d="${g.d}" fill="none" stroke="rgba(31,29,26,0.25)" stroke-width="1.1" stroke-linecap="round"/></svg></div>`;
+}
+
+/**
+ * Ảnh món đồ không tải được (ví dụ URL trỏ tới file ảnh cũ Safari đã thay):
+ * lần 1 — đọc lại món từ database và tạo URL mới; lần 2 vẫn lỗi — hiện hình minh họa,
+ * không bao giờ để lại dấu "?".
+ */
+async function onImageError(img) {
+  const id = img.dataset.itemId;
+  const showGlyph = () => {
+    const item = S.items.find((i) => i.id === id);
+    const box = img.closest('.thumb');
+    if (item && box && box.isConnected) box.outerHTML = glyphHTML(item);
+    else img.remove();
+  };
+  if (img.dataset.retried) {
+    console.warn('[Fitpick] Ảnh vẫn lỗi sau khi tạo lại URL, hiện hình minh họa', id);
+    showGlyph();
+    return;
+  }
+  img.dataset.retried = '1';
+  img.style.visibility = 'hidden'; // không để trình duyệt vẽ dấu "?" trong lúc thử lại
+  try {
+    const fresh = await DB.getItem(id);
+    if (!fresh || !fresh.imageBlob || !img.isConnected) { showGlyph(); return; }
+    const local = S.items.find((i) => i.id === id);
+    if (local) local.imageBlob = fresh.imageBlob;
+    console.warn('[Fitpick] Ảnh không tải được, tạo lại URL từ dữ liệu mới', id);
+    img.src = ImageTools.renewItemImage(id, fresh.imageBlob);
+    img.style.visibility = '';
+  } catch (err) {
+    console.error('[Fitpick] Không đọc lại được ảnh', id, err);
+    showGlyph();
+  }
 }
 
 /** Hiện lỗi dễ hiểu. Lỗi kỹ thuật lạ thì dùng câu dự phòng. */
@@ -670,38 +712,51 @@ function viewItemDetail(id) {
 }
 
 /** Bấm nút "Mặc hôm nay" / "Đã mặc hôm nay ✓". */
-async function toggleWear(id) {
-  const item = S.items.find((i) => i.id === id);
-  if (!item) return;
-  if (DB.isToday(item.lastWornAt)) {
-    const back = item.previousLastWornAt ? `ngày mặc gần nhất trở về ${fmtShort(item.previousLastWornAt)}` : 'món sẽ trở lại “chưa mặc lần nào”';
-    const ok = await confirmDialog({
-      title: 'Bỏ đánh dấu mặc hôm nay?',
-      text: `Số lần mặc sẽ trở về ${Math.max(0, item.wearCount - 1)}, ${back}.`,
-      ok: 'Bỏ đánh dấu', cancel: 'Giữ nguyên', center: true
-    });
-    if (ok) await unmarkWear(id);
-    return;
-  }
-  try {
-    const updated = await DB.markWornToday(id);
-    await reload();
-    render();
-    if (updated) {
-      toast(`Đã ghi lần mặc thứ ${updated.wearCount}`, { actionLabel: 'Hoàn tác', onAction: () => unmarkWear(id), duration: 5000 });
+function toggleWear(id) {
+  const key = 'item:' + id;
+  return exclusive(key, async () => {
+    const item = S.items.find((i) => i.id === id);
+    if (!item) return;
+    if (DB.isToday(item.lastWornAt)) {
+      // Bỏ đánh dấu bằng nút → đóng thanh Hoàn tác của món này để hai đường không chồng nhau
+      hideToastFor(key);
+      const back = item.previousLastWornAt ? `ngày mặc gần nhất trở về ${fmtShort(item.previousLastWornAt)}` : 'món sẽ trở lại “chưa mặc lần nào”';
+      const ok = await confirmDialog({
+        title: 'Bỏ đánh dấu mặc hôm nay?',
+        text: `Số lần mặc sẽ trở về ${Math.max(0, item.wearCount - 1)}, ${back}.`,
+        ok: 'Bỏ đánh dấu', cancel: 'Giữ nguyên', center: true
+      });
+      if (ok) await doUnmarkWear(id);
+      return;
     }
-  } catch (err) {
-    showError(err, 'Không ghi được lần mặc.');
-  }
+    try {
+      const updated = await DB.markWornToday(id);
+      await reload();
+      render();
+      if (updated) {
+        toast(`Đã ghi lần mặc thứ ${updated.wearCount}`, {
+          actionLabel: 'Hoàn tác', onAction: () => unmarkWear(id), duration: 5000, owner: key
+        });
+      }
+    } catch (err) {
+      showError(err, 'Không ghi được lần mặc.');
+      await reloadAndRender();
+    }
+  });
 }
 
-/** Bỏ đánh dấu mặc hôm nay (từ nút Hoàn tác hoặc hộp xác nhận). */
-async function unmarkWear(id) {
+/** Bấm Hoàn tác trên thanh thông báo của món đồ. */
+function unmarkWear(id) {
+  return exclusive('item:' + id, () => doUnmarkWear(id));
+}
+
+/** Bỏ đánh dấu mặc hôm nay của món (gọi bên trong khóa của món). */
+async function doUnmarkWear(id) {
   try {
-    await DB.unmarkWornToday(id);
+    const res = await DB.unmarkWornToday(id);
     await reload();
     render();
-    toast('Đã bỏ đánh dấu');
+    toast(res ? 'Đã bỏ đánh dấu' : 'Món này đã được bỏ đánh dấu rồi');
   } catch (err) {
     showError(err, 'Không bỏ đánh dấu được.');
     await reloadAndRender();
@@ -898,40 +953,51 @@ function viewCategoryDetail(id) {
 }
 
 /** Bấm "Hôm nay mặc bộ này" / "Đã mặc hôm nay". */
-async function toggleOutfitWear(id) {
-  const o = S.outfits.find((x) => x.id === id);
-  if (!o) return;
-  if (DB.isToday(o.lastWornAt)) {
-    const k = (o.lastWearItemIds || []).length;
-    const ok = await confirmDialog({
-      title: 'Bỏ đánh dấu mặc hôm nay?',
-      text: `Outfit trở về ${Math.max(0, o.wearCount - 1)} lần mặc` + (k ? `, ${k} món trong bộ cũng được trừ lại 1 lần.` : '.'),
-      ok: 'Bỏ đánh dấu', cancel: 'Giữ nguyên', center: true
-    });
-    if (ok) await unmarkOutfitWear(id);
-    return;
-  }
-  try {
-    const res = await DB.markOutfitWornToday(id);
-    await reload();
-    render();
-    if (!res) return;
-    const total = outfitItems(res.outfit).length;
-    const skipped = total - res.addedItems;
-    toast(`Đã ghi lần mặc thứ ${res.outfit.wearCount}` + (skipped > 0 ? ` · ${skipped} món đã ghi hôm nay` : ''),
-      { actionLabel: 'Hoàn tác', onAction: () => unmarkOutfitWear(id), duration: 5000 });
-  } catch (err) {
-    showError(err, 'Không ghi được lần mặc.');
-  }
+function toggleOutfitWear(id) {
+  const key = 'outfit:' + id;
+  return exclusive(key, async () => {
+    const o = S.outfits.find((x) => x.id === id);
+    if (!o) return;
+    if (DB.isToday(o.lastWornAt)) {
+      // Bỏ đánh dấu bằng nút → đóng thanh Hoàn tác của outfit này để hai đường không chồng nhau
+      hideToastFor(key);
+      const k = (o.lastWearItemIds || []).length;
+      const ok = await confirmDialog({
+        title: 'Bỏ đánh dấu mặc hôm nay?',
+        text: `Outfit trở về ${Math.max(0, o.wearCount - 1)} lần mặc` + (k ? `, ${k} món trong bộ cũng được trừ lại 1 lần.` : '.'),
+        ok: 'Bỏ đánh dấu', cancel: 'Giữ nguyên', center: true
+      });
+      if (ok) await doUnmarkOutfitWear(id);
+      return;
+    }
+    try {
+      const res = await DB.markOutfitWornToday(id);
+      await reload();
+      render();
+      if (!res) return;
+      const total = outfitItems(res.outfit).length;
+      const skipped = total - res.addedItems;
+      toast(`Đã ghi lần mặc thứ ${res.outfit.wearCount}` + (skipped > 0 ? ` · ${skipped} món đã ghi hôm nay` : ''),
+        { actionLabel: 'Hoàn tác', onAction: () => unmarkOutfitWear(id), duration: 5000, owner: key });
+    } catch (err) {
+      showError(err, 'Không ghi được lần mặc.');
+      await reloadAndRender();
+    }
+  });
 }
 
-/** Hoàn tác lần mặc hôm nay của outfit (từ nút Hoàn tác hoặc hộp xác nhận). */
-async function unmarkOutfitWear(id) {
+/** Bấm Hoàn tác trên thanh thông báo của outfit. */
+function unmarkOutfitWear(id) {
+  return exclusive('outfit:' + id, () => doUnmarkOutfitWear(id));
+}
+
+/** Hoàn tác lần mặc hôm nay của outfit (gọi bên trong khóa của outfit). */
+async function doUnmarkOutfitWear(id) {
   try {
-    await DB.unmarkOutfitWornToday(id);
+    const res = await DB.unmarkOutfitWornToday(id);
     await reload();
     render();
-    toast('Đã bỏ đánh dấu');
+    toast(res ? 'Đã bỏ đánh dấu' : 'Outfit này đã được bỏ đánh dấu rồi');
   } catch (err) {
     showError(err, 'Không bỏ đánh dấu được.');
     await reloadAndRender();
@@ -1559,13 +1625,15 @@ async function importFlow(file) {
 /* ============================ Toast & hộp thoại ============================ */
 
 let toastTimer = null;
+let toastOwner = null; // thao tác sở hữu thanh thông báo hiện tại (ví dụ 'item:<id>')
 
 /**
  * Hiện thông báo nhỏ phía dưới. Có thể kèm nút (ví dụ "Hoàn tác").
  * Tự ẩn sau `duration` mili giây.
  */
-function toast(message, { actionLabel, onAction, duration = 3000, error = false } = {}) {
+function toast(message, { actionLabel, onAction, duration = 3000, error = false, owner = null } = {}) {
   clearTimeout(toastTimer);
+  toastOwner = owner;
   $toastRoot.innerHTML = `<div class="toast ${error ? 'toast--error' : ''}" role="${error ? 'alert' : 'status'}">
     <span class="toast__msg">${esc(message)}</span>
     ${actionLabel ? `<button type="button" class="toast__action">${esc(actionLabel)}</button>` : ''}
@@ -1583,7 +1651,33 @@ function toast(message, { actionLabel, onAction, duration = 3000, error = false 
 /** Ẩn thông báo nhỏ. */
 function hideToast() {
   clearTimeout(toastTimer);
+  toastOwner = null;
   $toastRoot.innerHTML = '';
+}
+
+/** Ẩn thanh thông báo nếu nó thuộc về đúng thao tác `owner` (ví dụ thanh Hoàn tác của món này). */
+function hideToastFor(owner) {
+  if (owner && toastOwner === owner) hideToast();
+}
+
+/* Khóa theo từng món/outfit: mỗi lúc chỉ một thao tác ghi/bỏ lần mặc được chạy. */
+const runningKeys = new Set();
+
+/**
+ * Chạy fn() nếu chưa có thao tác nào cùng `key` đang chạy; nếu đang chạy thì bỏ qua lần bấm này.
+ * Nhờ vậy nút Hoàn tác, nút bấm lại và bấm đúp không thể chồng lên nhau.
+ */
+async function exclusive(key, fn) {
+  if (runningKeys.has(key)) {
+    console.info('[Fitpick] Bỏ qua thao tác trùng khi đang xử lý', key);
+    return;
+  }
+  runningKeys.add(key);
+  try {
+    return await fn();
+  } finally {
+    runningKeys.delete(key);
+  }
 }
 
 let modalCleanup = null;
@@ -1822,6 +1916,15 @@ function bindGlobalEvents() {
   });
 
   window.addEventListener('popstate', () => render());
+
+  // Ảnh món đồ không tải được → thử tạo lại URL, rồi mới dùng hình minh họa (sự kiện error không nổi bọt nên bắt ở pha capture)
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (img && img.tagName === 'IMG' && img.dataset.itemId) onImageError(img);
+  }, true);
+
+  // Món nào vừa được ghi lại thì lần vẽ tới tạo URL ảnh mới (xem image.js)
+  DB.onItemsWritten((ids) => ImageTools.markStale(ids));
 
   // Quay lại app sau một thời gian (có thể đã sang ngày mới): vẽ lại trạng thái "Mặc hôm nay".
   document.addEventListener('visibilitychange', () => {

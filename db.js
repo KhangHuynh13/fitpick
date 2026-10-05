@@ -124,29 +124,121 @@ const DB = (() => {
    */
   async function tx(storeNames, mode, work, errorMessage) {
     const db = await open();
+    const base = errorMessage || 'Không đọc/ghi được dữ liệu.';
     return new Promise((resolve, reject) => {
       let result;
       let t;
+      let settled = false;
+      const fail = (cause) => {
+        if (settled) return;
+        settled = true;
+        reject(cause instanceof DBError ? cause : failure(base, cause));
+      };
       try {
         t = db.transaction(storeNames, mode);
       } catch (err) {
-        reject(new DBError(errorMessage || 'Không đọc/ghi được dữ liệu.', err));
+        fail(err);
         return;
       }
-      t.oncomplete = () => resolve(result);
-      t.onerror = () => reject(new DBError(errorMessage || 'Không đọc/ghi được dữ liệu.', t.error));
-      t.onabort = () => {
-        const quota = t.error && t.error.name === 'QuotaExceededError';
-        reject(new DBError(quota ? 'Bộ nhớ trình duyệt đã đầy. Hãy xóa bớt món đồ hoặc giải phóng dung lượng máy.' : (errorMessage || 'Thao tác dữ liệu bị hủy.'), t.error));
-      };
+      t.oncomplete = () => { settled = true; resolve(result); };
+      // Lúc sự kiện error xảy ra, t.error có thể còn null → lấy lỗi từ request gây ra lỗi
+      t.onerror = (e) => fail((e && e.target && e.target.error) || t.error);
+      t.onabort = () => fail(t.error);
       Promise.resolve()
         .then(() => work(t))
         .then((r) => { result = r; })
         .catch((err) => {
           try { t.abort(); } catch (_) { /* đã kết thúc */ }
-          reject(err instanceof DBError ? err : new DBError(errorMessage || 'Không đọc/ghi được dữ liệu.', err));
+          fail(err);
         });
     });
+  }
+
+  /**
+   * Tạo lỗi dễ hiểu kèm lý do cụ thể; chi tiết kỹ thuật ghi vào console để dò lỗi.
+   */
+  function failure(message, cause) {
+    console.error('[Fitpick DB]', message, cause && cause.name, cause && cause.message, cause);
+    return new DBError(`${message} ${reasonText(cause)}`.trim(), cause);
+  }
+
+  /** Lý do cụ thể (tiếng Việt) theo loại lỗi của trình duyệt. */
+  function reasonText(cause) {
+    const name = cause && cause.name;
+    const msg = String((cause && cause.message) || '');
+    if (name === 'QuotaExceededError') return 'Bộ nhớ trình duyệt đã đầy — hãy xóa bớt món đồ hoặc giải phóng dung lượng máy.';
+    if (name === 'UnknownError' || /blob|file/i.test(msg)) return 'Trình duyệt chưa ghi xong ảnh của món đồ — hãy thử lại sau vài giây.';
+    if (name === 'InvalidStateError') return 'Kết nối dữ liệu đã bị đóng — hãy đóng hẳn app rồi mở lại.';
+    if (name === 'TransactionInactiveError') return 'Thao tác bị gián đoạn — hãy thử lại.';
+    if (name === 'VersionError') return 'Dữ liệu được tạo bởi bản Fitpick mới hơn — hãy tải lại app.';
+    if (name) return `(Mã lỗi: ${name})`;
+    return '';
+  }
+
+  /** Lỗi tạm thời của trình duyệt (nên thử lại), không phải lỗi logic của app. */
+  function isTransient(err) {
+    const name = err && err.cause && err.cause.name;
+    return name === 'UnknownError' || name === 'TransactionInactiveError' || name === 'AbortError';
+  }
+
+  /**
+   * Chạy một thao tác ghi; nếu gặp lỗi tạm thời của trình duyệt thì đợi một chút rồi thử lại 1 lần.
+   * Transaction lỗi không ghi gì cả nên thử lại là an toàn.
+   */
+  async function withRetry(fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransient(err)) throw err;
+      console.warn('[Fitpick DB] Lỗi tạm thời, thử lại sau 400ms', err.cause);
+      await new Promise((r) => setTimeout(r, 400));
+      return fn();
+    }
+  }
+
+  /**
+   * Đọc ảnh vào bộ nhớ thành Blob mới (vẫn là Blob, không đổi cách lưu).
+   * Lý do: trên Safari/iPhone, ghi lại một Blob vừa đọc ra từ IndexedDB — nhất là Blob vừa được
+   * ghi ở thao tác trước — có thể lỗi "UnknownError", vì file ảnh cũ trên đĩa đã bị thay.
+   * Ghi bản sao trong bộ nhớ giống hệt lúc thêm món mới, nên luôn ghi được.
+   */
+  async function memoryBlob(blob) {
+    if (!blob) return null;
+    try {
+      const buffer = await blob.arrayBuffer();
+      return new Blob([buffer], { type: blob.type || 'image/jpeg' });
+    } catch (err) {
+      console.warn('[Fitpick DB] Không đọc được ảnh vào bộ nhớ, ghi lại Blob gốc', err);
+      return blob;
+    }
+  }
+
+  /** Chuẩn bị bản sao ảnh trong bộ nhớ cho các món sắp được ghi lại: Map id → Blob. */
+  async function snapshotImages(itemIds) {
+    const ids = [...new Set(itemIds || [])];
+    if (!ids.length) return new Map();
+    const items = await tx('items', 'readonly',
+      (t) => Promise.all(ids.map((id) => reqP(t.objectStore('items').get(id)))), 'Không đọc được ảnh món đồ.');
+    const map = new Map();
+    for (const it of items) {
+      if (it && it.imageBlob) map.set(it.id, await memoryBlob(it.imageBlob));
+    }
+    return map;
+  }
+
+  /** Thay ảnh của món bằng bản sao trong bộ nhớ (chỉ khi vẫn là cùng ảnh đó). */
+  function useSnapshot(item, images) {
+    const copy = images.get(item.id);
+    if (copy && item.imageBlob && copy.size === item.imageBlob.size) item.imageBlob = copy;
+  }
+
+  /* Báo cho giao diện biết món nào vừa được ghi lại (để làm mới URL ảnh). */
+  let itemsWrittenListener = null;
+  function onItemsWritten(fn) { itemsWrittenListener = fn; }
+  function notifyItemsWritten(ids) {
+    if (itemsWrittenListener && ids && ids.length) {
+      try { itemsWrittenListener(ids); } catch (err) { console.error(err); }
+    }
   }
 
   /** Lấy toàn bộ bản ghi của một store. */
@@ -219,25 +311,34 @@ const DB = (() => {
    * Xóa danh mục: chỉ gỡ id khỏi món đồ và outfit, không xóa món/outfit nào.
    */
   async function deleteCategory(id) {
-    return tx(['categories', 'items', 'outfits'], 'readwrite', async (t) => {
-      t.objectStore('categories').delete(id);
-      const items = await reqP(t.objectStore('items').getAll());
-      items.forEach((it) => {
-        if ((it.categoryIds || []).includes(id)) {
-          it.categoryIds = it.categoryIds.filter((c) => c !== id);
-          t.objectStore('items').put(it);
-        }
-      });
-      const outfits = await reqP(t.objectStore('outfits').getAll());
-      outfits.forEach((o) => {
-        const had = (o.categoryIds || []).includes(id) || (o.categoryAddedAt && id in o.categoryAddedAt);
-        if (had) {
-          o.categoryIds = (o.categoryIds || []).filter((c) => c !== id);
-          if (o.categoryAddedAt) delete o.categoryAddedAt[id];
-          t.objectStore('outfits').put(o);
-        }
-      });
-    }, 'Không xóa được danh mục.');
+    const touched = [];
+    await withRetry(async () => {
+      const all = await getAll('items');
+      const images = await snapshotImages(all.filter((it) => (it.categoryIds || []).includes(id)).map((it) => it.id));
+      touched.length = 0;
+      return tx(['categories', 'items', 'outfits'], 'readwrite', async (t) => {
+        t.objectStore('categories').delete(id);
+        const items = await reqP(t.objectStore('items').getAll());
+        items.forEach((it) => {
+          if ((it.categoryIds || []).includes(id)) {
+            it.categoryIds = it.categoryIds.filter((c) => c !== id);
+            useSnapshot(it, images);
+            t.objectStore('items').put(it);
+            touched.push(it.id);
+          }
+        });
+        const outfits = await reqP(t.objectStore('outfits').getAll());
+        outfits.forEach((o) => {
+          const had = (o.categoryIds || []).includes(id) || (o.categoryAddedAt && id in o.categoryAddedAt);
+          if (had) {
+            o.categoryIds = (o.categoryIds || []).filter((c) => c !== id);
+            if (o.categoryAddedAt) delete o.categoryAddedAt[id];
+            t.objectStore('outfits').put(o);
+          }
+        });
+      }, 'Không xóa được danh mục.');
+    });
+    notifyItemsWritten(touched);
   }
 
   /* ---------------------------- Món đồ ---------------------------- */
@@ -278,15 +379,22 @@ const DB = (() => {
 
   /** Cập nhật một số trường của món đồ (giữ nguyên các trường khác). */
   async function updateItem(id, changes) {
-    return tx('items', 'readwrite', async (t) => {
-      const store = t.objectStore('items');
-      const item = await reqP(store.get(id));
-      if (!item) throw new DBError('Món đồ không còn tồn tại.');
-      Object.assign(item, changes, { id });
-      if (item.wearCount < 0) item.wearCount = 0;
-      store.put(item);
-      return item;
-    }, 'Không lưu được thay đổi.');
+    const item = await withRetry(async () => {
+      // Không đổi ảnh thì ghi lại bản sao ảnh trong bộ nhớ (xem memoryBlob)
+      const images = 'imageBlob' in changes ? new Map() : await snapshotImages([id]);
+      return tx('items', 'readwrite', async (t) => {
+        const store = t.objectStore('items');
+        const current = await reqP(store.get(id));
+        if (!current) throw new DBError('Món đồ không còn tồn tại.');
+        Object.assign(current, changes, { id });
+        if (current.wearCount < 0) current.wearCount = 0;
+        useSnapshot(current, images);
+        store.put(current);
+        return current;
+      }, 'Không lưu được thay đổi.');
+    });
+    notifyItemsWritten([id]);
+    return item;
   }
 
   /**
@@ -294,17 +402,23 @@ const DB = (() => {
    * Trả về món đã cập nhật, hoặc null nếu hôm nay đã ghi rồi.
    */
   async function markWornToday(id) {
-    return tx('items', 'readwrite', async (t) => {
-      const store = t.objectStore('items');
-      const item = await reqP(store.get(id));
-      if (!item) throw new DBError('Món đồ không còn tồn tại.');
-      if (isToday(item.lastWornAt)) return null;
-      item.previousLastWornAt = item.lastWornAt || null;
-      item.wearCount = (item.wearCount || 0) + 1;
-      item.lastWornAt = nowISO();
-      store.put(item);
-      return item;
-    }, 'Không ghi được lần mặc.');
+    const item = await withRetry(async () => {
+      const images = await snapshotImages([id]);
+      return tx('items', 'readwrite', async (t) => {
+        const store = t.objectStore('items');
+        const current = await reqP(store.get(id));
+        if (!current) throw new DBError('Món đồ không còn tồn tại.');
+        if (isToday(current.lastWornAt)) return null;
+        current.previousLastWornAt = current.lastWornAt || null;
+        current.wearCount = (current.wearCount || 0) + 1;
+        current.lastWornAt = nowISO();
+        useSnapshot(current, images);
+        store.put(current);
+        return current;
+      }, 'Không ghi được lần mặc.');
+    });
+    if (item) notifyItemsWritten([id]);
+    return item;
   }
 
   /**
@@ -312,17 +426,24 @@ const DB = (() => {
    * wearCount −1, lastWornAt trở về previousLastWornAt.
    */
   async function unmarkWornToday(id) {
-    return tx('items', 'readwrite', async (t) => {
-      const store = t.objectStore('items');
-      const item = await reqP(store.get(id));
-      if (!item) throw new DBError('Món đồ không còn tồn tại.');
-      if (!isToday(item.lastWornAt)) throw new DBError('Chỉ bỏ đánh dấu được trong cùng ngày.');
-      item.wearCount = Math.max(0, (item.wearCount || 0) - 1);
-      item.lastWornAt = item.previousLastWornAt || null;
-      item.previousLastWornAt = null;
-      store.put(item);
-      return item;
-    }, 'Không bỏ đánh dấu được.');
+    const item = await withRetry(async () => {
+      const images = await snapshotImages([id]);
+      return tx('items', 'readwrite', async (t) => {
+        const store = t.objectStore('items');
+        const current = await reqP(store.get(id));
+        if (!current) throw new DBError('Món đồ không còn tồn tại.');
+        // Đã bỏ đánh dấu rồi (ví dụ bấm Hoàn tác hai lần) thì không làm gì, không báo lỗi
+        if (!isToday(current.lastWornAt)) return null;
+        current.wearCount = Math.max(0, (current.wearCount || 0) - 1);
+        current.lastWornAt = current.previousLastWornAt || null;
+        current.previousLastWornAt = null;
+        useSnapshot(current, images);
+        store.put(current);
+        return current;
+      }, 'Không bỏ đánh dấu được.');
+    });
+    if (item) notifyItemsWritten([id]);
+    return item;
   }
 
   /**
@@ -453,30 +574,37 @@ const DB = (() => {
    * Trả về { outfit, addedItems } hoặc null nếu hôm nay đã ghi bộ này rồi.
    */
   async function markOutfitWornToday(id) {
-    return tx(['outfits', 'items'], 'readwrite', async (t) => {
-      const outfits = t.objectStore('outfits');
-      const itemsStore = t.objectStore('items');
-      const outfit = await reqP(outfits.get(id));
-      if (!outfit) throw new DBError('Outfit không còn tồn tại.');
-      if (isToday(outfit.lastWornAt)) return null;
-      const now = nowISO();
-      const added = [];
-      for (const itemId of outfit.itemIds || []) {
-        const item = await reqP(itemsStore.get(itemId));
-        if (!item || isToday(item.lastWornAt)) continue;
-        item.previousLastWornAt = item.lastWornAt || null;
-        item.wearCount = (item.wearCount || 0) + 1;
-        item.lastWornAt = now;
-        itemsStore.put(item);
-        added.push(itemId);
-      }
-      outfit.previousLastWornAt = outfit.lastWornAt || null;
-      outfit.wearCount = (outfit.wearCount || 0) + 1;
-      outfit.lastWornAt = now;
-      outfit.lastWearItemIds = added;
-      outfits.put(outfit);
-      return { outfit, addedItems: added.length };
-    }, 'Không ghi được lần mặc.');
+    const res = await withRetry(async () => {
+      const before = await get('outfits', id);
+      const images = await snapshotImages(before ? before.itemIds : []);
+      return tx(['outfits', 'items'], 'readwrite', async (t) => {
+        const outfits = t.objectStore('outfits');
+        const itemsStore = t.objectStore('items');
+        const outfit = await reqP(outfits.get(id));
+        if (!outfit) throw new DBError('Outfit không còn tồn tại.');
+        if (isToday(outfit.lastWornAt)) return null;
+        const now = nowISO();
+        const added = [];
+        for (const itemId of outfit.itemIds || []) {
+          const item = await reqP(itemsStore.get(itemId));
+          if (!item || isToday(item.lastWornAt)) continue;
+          item.previousLastWornAt = item.lastWornAt || null;
+          item.wearCount = (item.wearCount || 0) + 1;
+          item.lastWornAt = now;
+          useSnapshot(item, images);
+          itemsStore.put(item);
+          added.push(itemId);
+        }
+        outfit.previousLastWornAt = outfit.lastWornAt || null;
+        outfit.wearCount = (outfit.wearCount || 0) + 1;
+        outfit.lastWornAt = now;
+        outfit.lastWearItemIds = added;
+        outfits.put(outfit);
+        return { outfit, addedItems: added.length };
+      }, 'Không ghi được lần mặc.');
+    });
+    if (res) notifyItemsWritten(res.outfit.lastWearItemIds);
+    return res;
   }
 
   /**
@@ -484,29 +612,38 @@ const DB = (() => {
    * Trừ lại outfit và đúng các món trong lastWearItemIds (món nào đã tự bỏ đánh dấu thì bỏ qua).
    */
   async function unmarkOutfitWornToday(id) {
-    return tx(['outfits', 'items'], 'readwrite', async (t) => {
-      const outfits = t.objectStore('outfits');
-      const itemsStore = t.objectStore('items');
-      const outfit = await reqP(outfits.get(id));
-      if (!outfit) throw new DBError('Outfit không còn tồn tại.');
-      if (!isToday(outfit.lastWornAt)) throw new DBError('Chỉ bỏ đánh dấu được trong cùng ngày.');
-      let removed = 0;
-      for (const itemId of outfit.lastWearItemIds || []) {
-        const item = await reqP(itemsStore.get(itemId));
-        if (!item || !isToday(item.lastWornAt)) continue;
-        item.wearCount = Math.max(0, (item.wearCount || 0) - 1);
-        item.lastWornAt = item.previousLastWornAt || null;
-        item.previousLastWornAt = null;
-        itemsStore.put(item);
-        removed++;
-      }
-      outfit.wearCount = Math.max(0, (outfit.wearCount || 0) - 1);
-      outfit.lastWornAt = outfit.previousLastWornAt || null;
-      outfit.previousLastWornAt = null;
-      outfit.lastWearItemIds = [];
-      outfits.put(outfit);
-      return { outfit, removedItems: removed };
-    }, 'Không bỏ đánh dấu được.');
+    const touched = [];
+    const res = await withRetry(async () => {
+      const before = await get('outfits', id);
+      const images = await snapshotImages(before ? before.lastWearItemIds : []);
+      touched.length = 0;
+      return tx(['outfits', 'items'], 'readwrite', async (t) => {
+        const outfits = t.objectStore('outfits');
+        const itemsStore = t.objectStore('items');
+        const outfit = await reqP(outfits.get(id));
+        if (!outfit) throw new DBError('Outfit không còn tồn tại.');
+        // Đã bỏ đánh dấu rồi (Hoàn tác và nút bấm gần như cùng lúc) thì không làm gì, không báo lỗi
+        if (!isToday(outfit.lastWornAt)) return null;
+        for (const itemId of outfit.lastWearItemIds || []) {
+          const item = await reqP(itemsStore.get(itemId));
+          if (!item || !isToday(item.lastWornAt)) continue;
+          item.wearCount = Math.max(0, (item.wearCount || 0) - 1);
+          item.lastWornAt = item.previousLastWornAt || null;
+          item.previousLastWornAt = null;
+          useSnapshot(item, images);
+          itemsStore.put(item);
+          touched.push(itemId);
+        }
+        outfit.wearCount = Math.max(0, (outfit.wearCount || 0) - 1);
+        outfit.lastWornAt = outfit.previousLastWornAt || null;
+        outfit.previousLastWornAt = null;
+        outfit.lastWearItemIds = [];
+        outfits.put(outfit);
+        return { outfit, removedItems: touched.length };
+      }, 'Không bỏ đánh dấu được.');
+    });
+    notifyItemsWritten(touched);
+    return res;
   }
 
   /* ---------------------------- Meta ---------------------------- */
@@ -603,7 +740,7 @@ const DB = (() => {
 
   return {
     DBError, ITEM_TYPES, DB_VERSION,
-    open, newId, nowISO, dayKey, isToday,
+    open, newId, nowISO, dayKey, isToday, onItemsWritten,
     getCategories, addCategory, renameCategory, reorderCategories, deleteCategory,
     getItems, getItem, addItem, updateItem, markWornToday, unmarkWornToday, deleteItem,
     getOutfits, addOutfit, updateOutfit, deleteOutfit, setCategoryOutfits,

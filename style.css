@@ -505,7 +505,15 @@ svg { flex: none; }
 }
 .toast__msg { flex: 1; font-size: 14px; line-height: 1.4; padding: 10px 0; }
 .toast__action { height: 44px; padding: 0 16px; border-radius: 12px; border: 0; background: transparent; color: #C9D3AE; font-size: 14px; font-weight: 600; }
-.toast--error { background: var(--danger); }
+/* Thông báo không chặn bấm vào nút bên dưới; chỉ nút Hoàn tác trên thông báo là bấm được */
+.toast { pointer-events: none; }
+.toast__action { pointer-events: auto; }
+/* Lỗi hiện ở phía trên màn hình để không che các nút ở dưới */
+.toast--error {
+  background: var(--danger);
+  top: calc(var(--safe-top) + 12px); bottom: auto;
+  padding-right: 18px;
+}
 .toast--error .toast__action { color: #FFFFFF; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
