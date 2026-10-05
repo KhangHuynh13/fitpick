@@ -7,6 +7,8 @@
 const ImageTools = (() => {
   const MAX_SIDE = 800;
   const JPEG_QUALITY = 0.8;
+  // Màu kem nền app (thiết kế) — tô dưới ảnh để vùng trong suốt không bị đen khi nén JPEG
+  const BACKGROUND = '#F7F3EC';
 
   /** Nạp một File/Blob ảnh thành thẻ <img> đã giải mã xong. */
   function loadImage(blob) {
@@ -32,7 +34,7 @@ const ImageTools = (() => {
   /**
    * Thu nhỏ ảnh người dùng chọn: cạnh dài tối đa 800px, nén JPEG chất lượng 0.8.
    * Trình duyệt hiện đại tự xoay ảnh theo EXIF khi vẽ lên canvas.
-   * Nền trắng được tô trước để ảnh PNG trong suốt không bị đen.
+   * Nền màu kem được tô trước để ảnh PNG trong suốt không bị đen.
    */
   async function processPhoto(file) {
     if (!file) throw new Error('Chưa chọn ảnh.');
@@ -51,7 +53,7 @@ const ImageTools = (() => {
       canvas.width = cw;
       canvas.height = ch;
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = BACKGROUND;
       ctx.fillRect(0, 0, cw, ch);
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, cw, ch);

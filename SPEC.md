@@ -8,7 +8,7 @@ Lộ trình:
 | Giai đoạn | Nội dung | Trạng thái |
 |---|---|---|
 | 1 | Tủ đồ, thêm/sửa/xem/xóa món đồ, "Mặc hôm nay", Cài đặt (sao lưu, danh mục, thống kê, hướng dẫn cài), nhắc sao lưu | **Đã làm** |
-| 2 | Tab Outfit (danh mục dạng album, tạo/sửa outfit, "Hôm nay mặc bộ này") | Chưa làm — tab hiện "Sắp ra mắt" |
+| 2 | Tab Outfit (danh mục dạng album, tạo/sửa outfit, "Hôm nay mặc bộ này") | **Đã làm** (phiên bản 1.1) |
 | 3 | Tab Gợi ý phối đồ theo luật (không dùng AI) | Chưa làm — tab hiện "Sắp ra mắt" |
 
 ---
@@ -111,13 +111,24 @@ Màu trung tính (dùng cho gợi ý): Trắng, Đen, Xám, Be, Xanh navy.
 - Nút tìm kiếm ở màn Tủ đồ (có trong thiết kế): lọc nhanh theo tên món.
 - Định dạng file sao lưu: xem `README.md`.
 
-## 5. Giai đoạn 2 (chưa làm)
+## 5. Giai đoạn 2 (đã làm — phiên bản 1.1)
 
 - Tab Outfit có 2 chế độ **"Danh mục | Tất cả"**, mặc định Danh mục.
 - Danh mục dạng lưới album: ảnh bìa ghép 2x2 lấy từ outfit được thêm vào danh mục gần nhất (dựa vào `categoryAddedAt`), thiếu thì lấy thêm từ outfit kế tiếp, ô thiếu để trống. Có ô **"Chưa phân loại"** tự lọc outfit có `categoryIds` rỗng (không lưu thành danh mục thật). Ô cuối **"+ Tạo danh mục"**.
 - Màn chi tiết danh mục: danh sách outfit, nút "Thêm outfit vào danh mục", menu Đổi tên/Xóa.
 - Tạo/Sửa outfit: chọn món theo loại, xem trước, đặt tên, chọn danh mục (nhiều).
 - **"Hôm nay mặc bộ này"**: outfit +1 và từng món trong bộ +1 theo quy tắc "Mặc hôm nay"; món nào đã ghi hôm nay thì bỏ qua. Lưu các món thực sự được cộng vào `lastWearItemIds`. Hoàn tác (thông báo 5 giây hoặc bấm lại nút rồi xác nhận, chỉ trong cùng ngày) thì trừ lại outfit và đúng các món trong `lastWearItemIds`.
+
+### Quyết định triển khai bổ sung (giai đoạn 2)
+
+- Màn Tạo/Sửa outfit chia món theo 4 nhóm như thiết kế: **Áo** (Áo, Áo khoác) · **Quần/Váy** (Quần, Váy/Đầm) · **Giày** · **Phụ kiện** (Túi, Phụ kiện). Mỗi nhóm chọn được nhiều món (ví dụ áo + áo khoác, túi + mũ). Outfit cần ít nhất 1 món; bỏ trống tên thì tự đặt "Outfit dd/mm".
+- Bấm vào thẻ outfit (ảnh hoặc tên) để mở màn Sửa outfit; nút Xóa outfit nằm ở màn này. Xóa outfit không xóa món đồ.
+- Bấm nút "+" khi đang xem một danh mục → outfit mới được chọn sẵn danh mục đó.
+- Ảnh bìa album lấy các món **khác nhau** từ outfit được thêm vào danh mục gần nhất, rồi outfit kế tiếp, tối đa 4 ô.
+- Album "Chưa phân loại" chỉ hiện khi có ít nhất 1 outfit chưa có danh mục.
+- Sửa outfit (đổi món/danh mục) giữ nguyên số lần mặc. Danh mục giữ lại thì giữ thời điểm `categoryAddedAt` cũ; món bị bỏ khỏi bộ cũng được bỏ khỏi `lastWearItemIds`.
+- Không đổi cấu trúc database (vẫn `DB_VERSION = 1`) nên dữ liệu của bản 1.0 được giữ nguyên khi cập nhật.
+- Ảnh có vùng trong suốt được tô nền màu kem `#F7F3EC` trước khi nén JPEG.
 
 ## 6. Giai đoạn 3 (chưa làm)
 

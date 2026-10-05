@@ -1,13 +1,24 @@
 /* =========================================================================
-   app.js — Giao diện Fitpick (giai đoạn 1)
+   app.js — Giao diện Fitpick (giai đoạn 1 + 2)
    Ứng dụng một trang, điều hướng bằng hash: #/tu-do, #/mon/<id>, #/them,
-   #/sua/<id>, #/outfit, #/goi-y, #/cai-dat
+   #/sua/<id>, #/outfit, #/danh-muc/<id|none>, #/tao-outfit[/<idDanhMục>],
+   #/sua-outfit/<id>, #/goi-y, #/cai-dat
    ========================================================================= */
 'use strict';
 
 /* ============================ Hằng số ============================ */
 
-const APP_VERSION = '1.0';
+const APP_VERSION = '1.1';
+
+// Nhóm loại đồ ở màn Tạo/Sửa outfit (theo thiết kế: Áo · Quần/Váy · Giày · Phụ kiện)
+const OUTFIT_GROUPS = [
+  { key: 'ao', label: 'Áo', hint: 'Chọn áo', types: ['Áo', 'Áo khoác'] },
+  { key: 'duoi', label: 'Quần/Váy', hint: 'Chọn quần/váy', types: ['Quần', 'Váy/Đầm'] },
+  { key: 'giay', label: 'Giày', hint: 'Chọn giày', types: ['Giày'] },
+  { key: 'pk', label: 'Phụ kiện', hint: 'Chọn phụ kiện', types: ['Túi', 'Phụ kiện'] }
+];
+// Id giả cho album "Chưa phân loại" (không lưu thành danh mục thật)
+const UNCATEGORIZED = 'none';
 
 // Bảng màu món đồ (theo thiết kế)
 const COLORS = [
@@ -50,6 +61,8 @@ const ICON = {
   phone: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3" stroke-linecap="round"/></svg>',
   share: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1"/></svg>',
   dots: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
+  dotsH: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>',
+  checkSmall: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   hanger: (s = 28) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6a2 2 0 1 1 2.6 1.9c-.4.1-.6.5-.6.9V10"/><path d="M12 10l-8.6 6.4c-.7.5-.3 1.6.6 1.6h16c.9 0 1.3-1.1.6-1.6L12 10z"/></svg>`,
   shirt: (s = 28) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 3.5L4 6l-1.5 4.5 3 1V20h13v-8.5l3-1L20 6l-4.5-2.5c-.6 1.5-2 2.4-3.5 2.4s-2.9-.9-3.5-2.4z"/></svg>`,
   sparkle: (s = 28) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.8 4.7 4.7 1.8-4.7 1.8L11 16l-1.8-4.7L4.5 9.5l4.7-1.8z"/><path d="M18.5 14.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>`
@@ -65,7 +78,9 @@ const S = {
   filter: 'Tất cả',     // chip loại đồ đang chọn ở màn Tủ đồ
   search: '',
   searchOpen: false,
-  form: null,           // dữ liệu đang nhập ở màn Thêm/Sửa
+  form: null,           // dữ liệu đang nhập ở màn Thêm/Sửa món đồ
+  oform: null,          // dữ liệu đang nhập ở màn Tạo/Sửa outfit
+  outfitMode: 'cat',    // chế độ tab Outfit: 'cat' (Danh mục) | 'all' (Tất cả)
   focusSearch: false,   // cần đặt con trỏ vào ô tìm kiếm sau lần vẽ tới
   routeKey: null,
   suggestChip: 'all'    // chip dịp đang chọn ở tab Gợi ý (giai đoạn 3)
@@ -199,7 +214,7 @@ function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const name = parts[0] || 'tu-do';
   const id = parts[1] ? decodeURIComponent(parts[1]) : null;
-  const known = ['tu-do', 'them', 'mon', 'sua', 'outfit', 'goi-y', 'cai-dat'];
+  const known = ['tu-do', 'them', 'mon', 'sua', 'outfit', 'danh-muc', 'tao-outfit', 'sua-outfit', 'goi-y', 'cai-dat'];
   return known.includes(name) ? { name, id } : { name: 'tu-do', id: null };
 }
 
@@ -234,6 +249,21 @@ function goBack(fallback) {
 function enterRoute(route) {
   if (S.form && S.form.previewURL) URL.revokeObjectURL(S.form.previewURL);
   S.form = null;
+  S.oform = null;
+  if (route.name === 'tao-outfit') {
+    const preset = S.categories.some((c) => c.id === route.id) ? [route.id] : [];
+    S.oform = { mode: 'add', name: '', itemIds: [], categoryIds: preset, tab: 'ao' };
+  } else if (route.name === 'sua-outfit') {
+    const o = S.outfits.find((x) => x.id === route.id);
+    if (o) {
+      S.oform = {
+        mode: 'edit', id: o.id, name: o.name,
+        itemIds: (o.itemIds || []).filter((id) => S.items.some((i) => i.id === id)),
+        categoryIds: (o.categoryIds || []).filter((id) => S.categories.some((c) => c.id === id)),
+        tab: 'ao'
+      };
+    }
+  }
   if (route.name === 'them') {
     S.form = {
       mode: 'add', name: '', type: DB.ITEM_TYPES.includes(S.filter) ? S.filter : 'Áo', color: null,
@@ -272,6 +302,9 @@ function render() {
     case 'sua': html = viewItemForm(); break;
     case 'mon': html = viewItemDetail(route.id); break;
     case 'outfit': html = viewOutfits(); break;
+    case 'danh-muc': html = viewCategoryDetail(route.id); break;
+    case 'tao-outfit':
+    case 'sua-outfit': html = viewOutfitForm(); break;
     case 'goi-y': html = viewSuggest(); break;
     case 'cai-dat': html = viewSettings(); break;
     default: html = viewWardrobe();
@@ -289,20 +322,24 @@ function render() {
 
 /** Cập nhật thanh điều hướng, nút "+" và khoảng trống phía dưới theo màn. */
 function updateChrome(route) {
-  const tabs = ['tu-do', 'outfit', 'goi-y', 'cai-dat'];
-  const isTab = tabs.includes(route.name);
+  // Màn chi tiết danh mục nằm trong tab Outfit nên vẫn có thanh điều hướng
+  const activeTab = route.name === 'danh-muc' ? 'outfit' : route.name;
+  const isTab = ['tu-do', 'outfit', 'goi-y', 'cai-dat'].includes(activeTab);
   $tabbar.hidden = !isTab;
   document.body.classList.toggle('has-actionbar', !isTab);
   $tabbar.querySelectorAll('.tab').forEach((t) => {
-    if (t.dataset.tab === route.name) t.setAttribute('aria-current', 'page');
+    if (t.dataset.tab === activeTab) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
   });
-  // Nút tròn "+" chỉ ở tab Tủ đồ và Outfit
-  const showFab = route.name === 'tu-do' || route.name === 'outfit';
+  // Nút tròn "+" chỉ ở tab Tủ đồ (thêm món) và Outfit (tạo outfit)
+  const showFab = activeTab === 'tu-do' || activeTab === 'outfit';
   $fab.hidden = !showFab;
   $tabbar.classList.toggle('no-fab', !showFab);
-  $fab.setAttribute('aria-label', route.name === 'outfit' ? 'Tạo outfit mới' : 'Thêm món đồ mới');
-  const titles = { 'tu-do': 'Tủ đồ', them: 'Thêm món đồ', mon: 'Chi tiết món đồ', sua: 'Sửa món đồ', outfit: 'Outfit', 'goi-y': 'Gợi ý', 'cai-dat': 'Cài đặt' };
+  $fab.setAttribute('aria-label', activeTab === 'outfit' ? 'Tạo outfit mới' : 'Thêm món đồ mới');
+  const titles = {
+    'tu-do': 'Tủ đồ', them: 'Thêm món đồ', mon: 'Chi tiết món đồ', sua: 'Sửa món đồ', outfit: 'Outfit',
+    'danh-muc': 'Danh mục', 'tao-outfit': 'Tạo outfit', 'sua-outfit': 'Sửa outfit', 'goi-y': 'Gợi ý', 'cai-dat': 'Cài đặt'
+  };
   document.title = route.name === 'tu-do' ? 'Fitpick' : `${titles[route.name]} · Fitpick`;
 }
 
@@ -592,13 +629,13 @@ function viewItemDetail(id) {
 
   const outfitCards = outfits.map((o) => {
     const tiles = o.itemIds.slice(0, 3).map((iid) => S.items.find((x) => x.id === iid)).filter(Boolean);
-    return `<div class="outfit-card">
+    return `<a class="outfit-card" href="#/sua-outfit/${encodeURIComponent(o.id)}" data-action="go" data-to="sua-outfit/${encodeURIComponent(o.id)}">
       <div class="outfit-card__tiles">${tiles.map((t) => thumbHTML(t)).join('')}</div>
       <div class="outfit-card__text">
         <span style="font-size:14px;font-weight:500">${esc(o.name)}</span>
-        <span class="hint hint--small">${o.wearCount > 0 ? `Đã mặc ${o.wearCount} lần` : 'Chưa mặc lần nào'}</span>
+        <span class="hint hint--small">${outfitWearLabel(o)}</span>
       </div>
-    </div>`;
+    </a>`;
   }).join('');
 
   return `<div>
@@ -622,7 +659,7 @@ function viewItemDetail(id) {
       </button>
       <section style="display:flex;flex-direction:column;gap:12px">
         <h2 class="title-md" style="font-size:24px">${outfits.length ? `Có trong ${outfits.length} outfit` : 'Chưa có trong outfit nào'}</h2>
-        ${outfits.length ? `<div class="outfit-grid">${outfitCards}</div>` : '<p class="hint">Bạn sẽ tạo được outfit ở tab Outfit (sắp ra mắt).</p>'}
+        ${outfits.length ? `<div class="outfit-grid">${outfitCards}</div>` : '<p class="hint">Phối món này với các món khác ở tab Outfit.</p>'}
       </section>
     </div>
   </div>
@@ -695,30 +732,403 @@ async function deleteItemFlow(id) {
   }
 }
 
-/* ============================ Outfit & Gợi ý (sắp ra mắt) ============================ */
+/* ============================ Tab Outfit ============================ */
 
-/** Tab Outfit — giai đoạn 1 chỉ hiện "Sắp ra mắt". */
-function viewOutfits() {
-  return `<div class="screen" style="padding-top:calc(var(--safe-top) + 24px)">
-    <div class="head-stack">
-      <header class="page-head__text">
-        <span class="eyebrow">${S.outfits.length} outfit</span>
-        <h1 class="title-xl">Outfit</h1>
-      </header>
-      <div class="segmented" role="tablist" aria-label="Chế độ xem">
-        <button type="button" role="tab" aria-selected="true" data-action="soon">Danh mục</button>
-        <button type="button" role="tab" aria-selected="false" data-action="soon">Tất cả</button>
+/** Dòng phụ số lần mặc của outfit. */
+function outfitWearLabel(o) {
+  return o.wearCount > 0 ? `Đã mặc ${o.wearCount} lần` : 'Chưa mặc lần nào';
+}
+
+/** Các món còn tồn tại trong outfit (theo thứ tự trong bộ). */
+function outfitItems(o) {
+  return (o.itemIds || []).map((id) => S.items.find((i) => i.id === id)).filter(Boolean);
+}
+
+/** Id danh mục còn tồn tại của outfit. */
+function liveCategoryIds(o) {
+  return (o.categoryIds || []).filter((id) => S.categories.some((c) => c.id === id));
+}
+
+/**
+ * Outfit thuộc một danh mục, outfit được thêm vào danh mục gần nhất đứng trước
+ * (dựa vào categoryAddedAt). Với "Chưa phân loại": outfit không có danh mục nào.
+ */
+function categoryMembers(catId) {
+  if (catId === UNCATEGORIZED) {
+    return S.outfits.filter((o) => liveCategoryIds(o).length === 0);
+  }
+  const addedAt = (o) => (o.categoryAddedAt && o.categoryAddedAt[catId]) || o.createdAt || '';
+  return S.outfits
+    .filter((o) => (o.categoryIds || []).includes(catId))
+    .sort((a, b) => addedAt(b).localeCompare(addedAt(a)));
+}
+
+/**
+ * Ảnh bìa 2x2 của album: lấy món từ outfit thêm vào danh mục gần nhất,
+ * thiếu thì lấy thêm từ outfit kế tiếp; ô thiếu để trống.
+ */
+function albumCoverHTML(catId) {
+  const picked = [];
+  for (const o of categoryMembers(catId)) {
+    for (const item of outfitItems(o)) {
+      if (picked.length < 4 && !picked.includes(item)) picked.push(item);
+    }
+    if (picked.length >= 4) break;
+  }
+  const cells = picked.map((i) => thumbHTML(i));
+  while (cells.length < 4) cells.push('<span class="album__blank"></span>');
+  return `<span class="album__cover">${cells.join('')}</span>`;
+}
+
+/** Thẻ outfit lớn (dùng ở chế độ Tất cả và chi tiết danh mục). */
+function outfitCardHTML(o) {
+  const items = outfitItems(o);
+  const tags = categoryNames(o.categoryIds);
+  const worn = DB.isToday(o.lastWornAt);
+  const link = `sua-outfit/${encodeURIComponent(o.id)}`;
+  return `<article class="ocard">
+    <a class="ocard__tiles" href="#/${link}" data-action="go" data-to="${link}" aria-label="Sửa outfit ${esc(o.name)}">
+      ${items.slice(0, 4).map((i) => thumbHTML(i)).join('')}
+    </a>
+    <div class="ocard__body">
+      <div class="ocard__head">
+        <h2 class="ocard__name"><a href="#/${link}" data-action="go" data-to="${link}">${esc(o.name)}</a></h2>
+        <span class="hint hint--small" style="white-space:nowrap">${outfitWearLabel(o)}</span>
+      </div>
+      <div class="detail-tags" style="padding:0">
+        ${tags.length ? tags.map((n) => `<span class="tag">${esc(n)}</span>`).join('') : '<span class="tag tag--none">Chưa phân loại</span>'}
       </div>
     </div>
-    <div class="empty">
+    <button type="button" class="ocard__wear" aria-pressed="${worn}" data-action="outfit-wear" data-value="${esc(o.id)}">
+      ${worn ? `${ICON.check} Đã mặc hôm nay` : 'Hôm nay mặc bộ này'}
+    </button>
+  </article>`;
+}
+
+/** Trạng thái trống khi chưa có outfit nào. */
+function noOutfitsHTML() {
+  if (S.items.length === 0) {
+    return `<div class="empty">
       <span class="empty__icon">${ICON.shirt(28)}</span>
-      <span class="soon-pill">Sắp ra mắt</span>
-      <p>Phối các món trong tủ thành outfit, xếp theo danh mục và ghi lại lần mặc cả bộ.</p>
-    </div>
+      <h2 class="title-md">Chưa có outfit nào</h2>
+      <p>Thêm vài món vào tủ đồ trước, rồi phối chúng thành outfit.</p>
+      <button type="button" class="btn btn--primary" data-action="go" data-to="them">${ICON.plus(18)} Thêm món đồ</button>
+    </div>`;
+  }
+  return `<div class="empty">
+    <span class="empty__icon">${ICON.shirt(28)}</span>
+    <h2 class="title-md">Chưa có outfit nào</h2>
+    <p>Phối các món trong tủ thành một bộ để mặc nhanh mỗi sáng.</p>
+    <button type="button" class="btn btn--primary" data-action="go" data-to="tao-outfit">${ICON.plus(18)} Tạo outfit</button>
   </div>`;
 }
 
-/** Tab Gợi ý — giai đoạn 1 chỉ hiện "Sắp ra mắt". */
+/** Tab Outfit: chế độ Danh mục (lưới album) hoặc Tất cả (danh sách thẻ). */
+function viewOutfits() {
+  const mode = S.outfitMode;
+  const modes = [['cat', 'Danh mục'], ['all', 'Tất cả']].map(([k, label]) =>
+    `<button type="button" role="tab" aria-selected="${mode === k}" data-action="outfit-mode" data-value="${k}">${label}</button>`).join('');
+
+  let body;
+  if (mode === 'all') {
+    body = S.outfits.length
+      ? `<div class="ocard-list">${S.outfits.map(outfitCardHTML).join('')}</div>`
+      : noOutfitsHTML();
+  } else {
+    const albums = S.categories.map((c) => ({ id: c.id, name: c.name }));
+    if (categoryMembers(UNCATEGORIZED).length) albums.push({ id: UNCATEGORIZED, name: 'Chưa phân loại' });
+    body = `<div class="album-grid">
+      ${albums.map((a) => `
+        <a class="album" href="#/danh-muc/${encodeURIComponent(a.id)}" data-action="go" data-to="danh-muc/${encodeURIComponent(a.id)}">
+          ${albumCoverHTML(a.id)}
+          <span class="album__text">
+            <span class="album__name">${esc(a.name)}</span>
+            <span class="hint hint--small">${categoryMembers(a.id).length} bộ</span>
+          </span>
+        </a>`).join('')}
+      <button type="button" class="album album--new" data-action="outfit-cat-create">
+        <span class="empty__icon" style="width:48px;height:48px">${ICON.plus(22)}</span>
+        <span style="font-size:14px;font-weight:600">Tạo danh mục</span>
+      </button>
+    </div>`;
+  }
+
+  return `<div class="screen screen--outfit">
+    <div class="head-stack">
+      <header class="page-head__text">
+        <span class="eyebrow">${S.outfits.length} bộ · ${S.categories.length} danh mục</span>
+        <h1 class="title-xl">Outfit</h1>
+      </header>
+      <div class="segmented" role="tablist" aria-label="Chế độ xem">${modes}</div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+/** Màn chi tiết một danh mục (hoặc "Chưa phân loại"). */
+function viewCategoryDetail(id) {
+  const isNone = id === UNCATEGORIZED;
+  const cat = S.categories.find((c) => c.id === id);
+  if (!isNone && !cat) {
+    return `<div class="screen screen--outfit">
+      <div class="head-stack"><div><button type="button" class="icon-btn" aria-label="Quay lại" data-action="back" data-fallback="outfit">${ICON.back}</button></div></div>
+      <div class="empty"><h2 class="title-md">Không tìm thấy danh mục</h2><p>Danh mục này có thể đã bị xóa.</p></div>
+    </div>`;
+  }
+  const members = categoryMembers(id);
+  const empty = isNone
+    ? '<div class="empty-dashed"><h2 class="title-md">Không còn outfit nào</h2><p>Mọi outfit đều đã có danh mục.</p></div>'
+    : '<div class="empty-dashed"><h2 class="title-md">Danh mục còn trống</h2><p>Bấm “Thêm outfit vào danh mục” để chọn từ các bộ đã lưu.</p></div>';
+
+  return `<div class="screen screen--outfit">
+    <div class="head-stack" style="padding-top:0">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <button type="button" class="icon-btn" aria-label="Quay lại danh mục" data-action="back" data-fallback="outfit">${ICON.back}</button>
+        ${isNone ? '' : `<button type="button" class="icon-btn" aria-label="Tùy chọn danh mục" data-action="outfit-cat-menu" data-value="${esc(id)}">${ICON.dotsH}</button>`}
+      </div>
+      <header class="page-head__text" style="gap:4px">
+        <span class="eyebrow">Danh mục</span>
+        <h1 class="title-xl">${esc(isNone ? 'Chưa phân loại' : cat.name)}</h1>
+        <span class="hint" style="font-size:14px">${members.length} bộ</span>
+      </header>
+      ${isNone ? '' : `<button type="button" class="btn btn--outline-accent" data-action="outfit-picker" data-value="${esc(id)}">${ICON.plus(16)} Thêm outfit vào danh mục</button>`}
+    </div>
+    ${members.length ? `<div class="ocard-list">${members.map(outfitCardHTML).join('')}</div>` : empty}
+  </div>`;
+}
+
+/** Bấm "Hôm nay mặc bộ này" / "Đã mặc hôm nay". */
+async function toggleOutfitWear(id) {
+  const o = S.outfits.find((x) => x.id === id);
+  if (!o) return;
+  if (DB.isToday(o.lastWornAt)) {
+    const k = (o.lastWearItemIds || []).length;
+    const ok = await confirmDialog({
+      title: 'Bỏ đánh dấu mặc hôm nay?',
+      text: `Outfit trở về ${Math.max(0, o.wearCount - 1)} lần mặc` + (k ? `, ${k} món trong bộ cũng được trừ lại 1 lần.` : '.'),
+      ok: 'Bỏ đánh dấu', cancel: 'Giữ nguyên', center: true
+    });
+    if (ok) await unmarkOutfitWear(id);
+    return;
+  }
+  try {
+    const res = await DB.markOutfitWornToday(id);
+    await reload();
+    render();
+    if (!res) return;
+    const total = outfitItems(res.outfit).length;
+    const skipped = total - res.addedItems;
+    toast(`Đã ghi lần mặc thứ ${res.outfit.wearCount}` + (skipped > 0 ? ` · ${skipped} món đã ghi hôm nay` : ''),
+      { actionLabel: 'Hoàn tác', onAction: () => unmarkOutfitWear(id), duration: 5000 });
+  } catch (err) {
+    showError(err, 'Không ghi được lần mặc.');
+  }
+}
+
+/** Hoàn tác lần mặc hôm nay của outfit (từ nút Hoàn tác hoặc hộp xác nhận). */
+async function unmarkOutfitWear(id) {
+  try {
+    await DB.unmarkOutfitWornToday(id);
+    await reload();
+    render();
+    toast('Đã bỏ đánh dấu');
+  } catch (err) {
+    showError(err, 'Không bỏ đánh dấu được.');
+    await reloadAndRender();
+  }
+}
+
+/** Bảng "Thêm vào “Danh mục”": tích chọn các outfit đã lưu. */
+function openOutfitPicker(catId) {
+  const cat = S.categories.find((c) => c.id === catId);
+  if (!cat) return;
+  const selected = new Set(categoryMembers(catId).map((o) => o.id));
+  const rows = S.outfits.map((o) => {
+    const names = categoryNames(o.categoryIds);
+    return `<button type="button" class="pick-row" aria-pressed="${selected.has(o.id)}" data-pick="${esc(o.id)}">
+      <span class="pick-row__tiles">${outfitItems(o).slice(0, 3).map((i) => thumbHTML(i)).join('')}</span>
+      <span class="pick-row__text"><span style="font-size:15px;font-weight:500">${esc(o.name)}</span><span class="hint hint--small">${esc(names.length ? names.join(' · ') : 'Chưa phân loại')}</span></span>
+      <span class="checkbox" aria-hidden="true">${ICON.checkSmall}</span>
+    </button>`;
+  }).join('');
+  const sheet = openModal(`<div class="sheet sheet--picker" role="dialog" aria-labelledby="pk-title">
+    <span class="sheet__grip"></span>
+    <div class="sheet__head" style="align-items:flex-start;padding:0 24px">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <h2 id="pk-title" class="title-md" style="font-size:28px;line-height:1.1">Thêm vào “${esc(cat.name)}”</h2>
+        <span class="hint">Tích chọn các outfit đã lưu</span>
+      </div>
+      <button type="button" class="icon-btn icon-btn--plain" aria-label="Đóng" data-m="close">${ICON.close}</button>
+    </div>
+    ${S.outfits.length
+      ? `<div class="pick-list">${rows}</div>
+         <div style="padding:4px 24px 0"><button type="button" class="btn btn--primary btn--lg btn--block" data-m="save">Lưu · ${selected.size} bộ</button></div>`
+      : `<div style="padding:0 24px;display:flex;flex-direction:column;gap:12px">
+           <p class="sheet__text">Bạn chưa lưu outfit nào.</p>
+           <button type="button" class="btn btn--primary btn--lg" data-m="create">${ICON.plus(18)} Tạo outfit</button>
+         </div>`}
+  </div>`);
+  sheet.addEventListener('click', async (e) => {
+    const row = e.target.closest('[data-pick]');
+    if (row) {
+      const id = row.dataset.pick;
+      if (selected.has(id)) selected.delete(id); else selected.add(id);
+      row.setAttribute('aria-pressed', selected.has(id));
+      sheet.querySelector('[data-m="save"]').textContent = `Lưu · ${selected.size} bộ`;
+      return;
+    }
+    const b = e.target.closest('[data-m]');
+    if (!b) return;
+    if (b.dataset.m === 'close') closeModal();
+    if (b.dataset.m === 'create') { closeModal(); navigate('tao-outfit/' + encodeURIComponent(catId)); }
+    if (b.dataset.m === 'save') {
+      setBusy(b, true, 'Đang lưu…');
+      try {
+        await DB.setCategoryOutfits(catId, [...selected]);
+        closeModal();
+        await reload();
+        render();
+        toast('Đã cập nhật danh mục');
+      } catch (err) {
+        setBusy(b, false);
+        showError(err, 'Không cập nhật được danh mục.');
+      }
+    }
+  });
+}
+
+/* ---------------------------- Tạo / Sửa outfit ---------------------------- */
+
+/** Màn Tạo/Sửa outfit: xem trước, chọn món theo nhóm, tên, danh mục. */
+function viewOutfitForm() {
+  const f = S.oform;
+  if (!f) {
+    return `<div class="screen screen--form">
+      <header class="form-head"><button type="button" class="icon-btn" aria-label="Quay lại" data-action="back" data-fallback="outfit">${ICON.back}</button><span></span><span class="spacer-44"></span></header>
+      <div class="empty" style="margin:0"><h2 class="title-md">Không tìm thấy outfit</h2><p>Outfit này có thể đã bị xóa.</p></div>
+    </div>`;
+  }
+  const isEdit = f.mode === 'edit';
+  const chosen = f.itemIds.map((id) => S.items.find((i) => i.id === id)).filter(Boolean);
+
+  // Ô xem trước: món đã chọn theo từng nhóm; nhóm chưa chọn thì hiện ô trống
+  const slots = OUTFIT_GROUPS.map((g) => {
+    const inGroup = chosen.filter((i) => g.types.includes(i.type));
+    if (!inGroup.length) {
+      return `<button type="button" class="slot slot--empty" data-action="oform-tab" data-value="${g.key}">${ICON.plus(20)}<span>${g.hint}</span></button>`;
+    }
+    return inGroup.map((i) => `<div class="slot">${thumbHTML(i)}</div>`).join('');
+  }).join('');
+
+  const tabs = OUTFIT_GROUPS.map((g) => {
+    const done = chosen.some((i) => g.types.includes(i.type));
+    return `<button type="button" role="tab" aria-selected="${f.tab === g.key}" data-action="oform-tab" data-value="${g.key}">${g.label}${done ? '<span class="dot"></span>' : ''}</button>`;
+  }).join('');
+
+  const group = OUTFIT_GROUPS.find((g) => g.key === f.tab);
+  const options = S.items.filter((i) => group.types.includes(i.type));
+  const optionsHTML = options.length
+    ? `<div class="option-row hs">${options.map((i) => `
+        <button type="button" class="option" aria-pressed="${f.itemIds.includes(i.id)}" data-action="oform-item" data-value="${esc(i.id)}">
+          <span class="option__img">${thumbHTML(i)}<span class="option__check">${ICON.checkSmall}</span></span>
+          <span class="option__name">${esc(i.name)}</span>
+        </button>`).join('')}</div>`
+    : `<div class="option-empty">
+        <span class="hint">Tủ chưa có ${group.types.map((t) => t.toLowerCase()).join(' hoặc ')}.</span>
+        <button type="button" class="link-btn" data-action="go" data-to="them">Thêm món đồ</button>
+      </div>`;
+
+  const cats = S.categories.map((c) => `
+    <button type="button" class="chip" aria-pressed="${f.categoryIds.includes(c.id)}" data-action="oform-cat" data-value="${esc(c.id)}">${esc(c.name)}</button>`).join('');
+
+  const count = chosen.length;
+  return `<div class="screen screen--oform">
+    <header class="form-head" style="padding:0 24px">
+      <button type="button" class="icon-btn" aria-label="Quay lại" data-action="back" data-fallback="outfit">${ICON.back}</button>
+      <h1 class="title-lg">${isEdit ? 'Sửa outfit' : 'Tạo outfit'}</h1>
+      <span class="spacer-44"></span>
+    </header>
+    <section class="preview" aria-label="Xem trước">${slots}</section>
+    <div class="segmented segmented--4" role="tablist" aria-label="Chọn theo loại">${tabs}</div>
+    ${optionsHTML}
+    <div class="field" style="gap:8px;padding:0 24px">
+      <label for="outfit-name" class="label">Tên outfit</label>
+      <input id="outfit-name" class="input" type="text" maxlength="60" placeholder="Ví dụ: Thứ Hai đi làm" value="${esc(f.name)}" autocomplete="off" enterkeyhint="done">
+    </div>
+    <div class="field" style="padding:0 24px">
+      <div class="field__head"><span class="label">Danh mục</span><span class="hint">Chọn được nhiều</span></div>
+      <div class="chip-wrap" role="group" aria-label="Danh mục">
+        ${cats}
+        <button type="button" class="chip chip--add" data-action="oform-add-cat">${ICON.plus(14)}Thêm</button>
+      </div>
+    </div>
+  </div>
+  <div class="actionbar">
+    <button type="button" class="btn btn--primary btn--lg" data-action="oform-save" ${count && !f.saving ? '' : 'disabled'}>${isEdit ? 'Lưu thay đổi' : 'Lưu outfit'} · ${count} món</button>
+    ${isEdit ? `<button type="button" class="btn btn--lg btn--danger-outline" data-action="oform-delete">${ICON.trash(18)} Xóa</button>` : ''}
+  </div>`;
+}
+
+/** Giữ lại tên outfit đang gõ trước khi vẽ lại form. */
+function keepOutfitName() {
+  const input = document.getElementById('outfit-name');
+  if (input && S.oform) S.oform.name = input.value;
+}
+
+/** Lưu outfit (tạo mới hoặc cập nhật). */
+async function saveOutfit(btn) {
+  const f = S.oform;
+  if (!f || f.saving) return;
+  keepOutfitName();
+  const itemIds = f.itemIds.filter((id) => S.items.some((i) => i.id === id));
+  if (!itemIds.length) {
+    toast('Hãy chọn ít nhất 1 món cho outfit.', { error: true });
+    return;
+  }
+  const name = f.name.trim() || `Outfit ${fmtShort(DB.nowISO())}`;
+  f.saving = true;
+  setBusy(btn, true, 'Đang lưu…');
+  try {
+    if (f.mode === 'add') {
+      await DB.addOutfit({ name, itemIds, categoryIds: f.categoryIds });
+      toast(`Đã lưu outfit “${name}”`);
+    } else {
+      await DB.updateOutfit(f.id, { name, itemIds, categoryIds: f.categoryIds });
+      toast('Đã lưu thay đổi');
+    }
+    await reload();
+    goBack('outfit');
+  } catch (err) {
+    f.saving = false;
+    setBusy(btn, false);
+    showError(err, 'Không lưu được outfit.');
+  }
+}
+
+/** Hỏi xác nhận rồi xóa outfit (các món đồ không bị xóa). */
+async function deleteOutfitFlow() {
+  const f = S.oform;
+  const o = f && S.outfits.find((x) => x.id === f.id);
+  if (!o) return;
+  const ok = await confirmDialog({
+    title: `Xóa ${o.name}?`,
+    text: 'Các món đồ trong outfit vẫn giữ nguyên trong tủ. Không thể hoàn tác.',
+    ok: 'Xóa outfit', cancel: 'Giữ lại', danger: true
+  });
+  if (!ok) return;
+  try {
+    await DB.deleteOutfit(o.id);
+    await reload();
+    toast(`Đã xóa outfit “${o.name}”`);
+    goBack('outfit');
+  } catch (err) {
+    showError(err, 'Không xóa được outfit.');
+  }
+}
+
+/* ============================ Tab Gợi ý (giai đoạn 3) ============================ */
+
+/** Tab Gợi ý — chưa làm (giai đoạn 3), chỉ hiện "Sắp ra mắt". */
 function viewSuggest() {
   const chips = [{ id: 'all', name: 'Tất cả' }, ...S.categories].map((c) => `
     <button type="button" class="chip" aria-pressed="${S.suggestChip === c.id}" data-action="suggest-chip" data-value="${esc(c.id)}">${esc(c.name)}</button>`).join('');
@@ -847,20 +1257,23 @@ function viewSettings() {
 }
 
 /** Bảng thao tác khi bấm vào một danh mục: Đổi tên / Xóa. */
-function openCategoryMenu(id) {
+function openCategoryMenu(id, { fromOutfitTab = false } = {}) {
   const cat = S.categories.find((c) => c.id === id);
   if (!cat) return;
   const n = categoryCounts(id);
+  // Ở tab Outfit chỉ nói về outfit (theo thiết kế 4c); ở Cài đặt nói cả món và outfit
+  const meta = fromOutfitTab ? `${n.outfits} bộ` : `${n.items} món · ${n.outfits} outfit`;
+  const keepNote = fromOutfitTab ? 'Các outfit sẽ không bị xóa' : 'Các món và outfit sẽ không bị xóa';
   const sheet = openModal(`<div class="sheet sheet--menu" role="dialog" aria-labelledby="cm-title">
     <span class="sheet__grip"></span>
     <div class="menu-head">
-      <span class="eyebrow">Danh mục · ${n.items} món · ${n.outfits} outfit</span>
+      <span class="eyebrow">Danh mục · ${meta}</span>
       <h2 id="cm-title" class="title-md" style="font-size:28px">${esc(cat.name)}</h2>
     </div>
     <button type="button" class="menu-item" data-m="rename">${ICON.edit(20)} Đổi tên</button>
     <span class="menu-sep"></span>
     <button type="button" class="menu-item menu-item--danger" data-m="delete">${ICON.trash(20)}
-      <span><span style="display:block">Xóa danh mục</span><span class="menu-item__sub">Các món và outfit sẽ không bị xóa</span></span>
+      <span><span style="display:block">Xóa danh mục</span><span class="menu-item__sub">${keepNote}</span></span>
     </button>
     <button type="button" class="btn" data-m="cancel">Hủy</button>
   </div>`);
@@ -881,8 +1294,9 @@ function openCategoryMenu(id) {
       try {
         await DB.deleteCategory(id);
         await reload();
-        render();
         toast(`Đã xóa danh mục “${cat.name}”`);
+        // Đang ở màn chi tiết của danh mục vừa xóa thì quay về lưới album
+        if (parseRoute().name === 'danh-muc') goBack('outfit'); else render();
       } catch (err) {
         showError(err, 'Không xóa được danh mục.');
       }
@@ -894,7 +1308,7 @@ function openCategoryMenu(id) {
  * Bảng nhập tên danh mục (dùng cho Thêm và Đổi tên).
  * onSave(name) được gọi khi bấm Lưu; lỗi trong onSave sẽ hiện ngay trong bảng.
  */
-function openNameSheet({ title, initial = '', excludeId = null, onSave }) {
+function openNameSheet({ title, initial = '', excludeId = null, note = '', onSave }) {
   const sheet = openModal(`<div class="sheet" role="dialog" aria-labelledby="ns-title">
     <span class="sheet__grip"></span>
     <div class="sheet__head">
@@ -905,6 +1319,7 @@ function openNameSheet({ title, initial = '', excludeId = null, onSave }) {
       <label for="ns-name" class="label">Tên danh mục</label>
       <input id="ns-name" class="input" style="background:var(--bg)" type="text" maxlength="24" placeholder="Ví dụ: Đi biển" value="${esc(initial)}" autocomplete="off" enterkeyhint="done">
       <span class="error-text" id="ns-error" hidden>Đã có danh mục tên này.</span>
+      ${note ? `<span class="hint hint--small">${esc(note)}</span>` : ''}
     </div>
     <button type="button" class="btn btn--primary btn--lg" data-m="save">Lưu</button>
   </div>`);
@@ -1301,8 +1716,52 @@ const ACTIONS = {
       toast(`Đã thêm danh mục “${name}”`);
     }
   }),
-  soon: () => toast('Tính năng này sắp ra mắt'),
-  'suggest-chip': (el) => { S.suggestChip = el.dataset.value; render(); }
+  'suggest-chip': (el) => { S.suggestChip = el.dataset.value; render(); },
+
+  // --- Tab Outfit ---
+  'outfit-mode': (el) => { S.outfitMode = el.dataset.value; render(); },
+  'outfit-wear': (el) => toggleOutfitWear(el.dataset.value),
+  'outfit-cat-create': () => openNameSheet({
+    title: 'Tạo danh mục mới',
+    onSave: async (name) => {
+      await DB.addCategory(name);
+      toast(`Đã tạo danh mục “${name}”`);
+    }
+  }),
+  'outfit-cat-menu': (el) => openCategoryMenu(el.dataset.value, { fromOutfitTab: true }),
+  'outfit-picker': (el) => openOutfitPicker(el.dataset.value),
+
+  // --- Màn Tạo/Sửa outfit ---
+  'oform-tab': (el) => { keepOutfitName(); S.oform.tab = el.dataset.value; render(); },
+  'oform-item': (el) => {
+    keepOutfitName();
+    const ids = S.oform.itemIds;
+    const id = el.dataset.value;
+    S.oform.itemIds = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+    render();
+  },
+  'oform-cat': (el) => {
+    keepOutfitName();
+    const ids = S.oform.categoryIds;
+    const id = el.dataset.value;
+    S.oform.categoryIds = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+    render();
+  },
+  'oform-add-cat': () => {
+    keepOutfitName();
+    const form = S.oform;
+    openNameSheet({
+      title: 'Tạo danh mục mới',
+      note: 'Danh mục mới sẽ được chọn sẵn cho outfit này.',
+      onSave: async (name) => {
+        const cat = await DB.addCategory(name);
+        if (S.oform === form) form.categoryIds.push(cat.id);
+        toast(`Đã tạo danh mục “${name}”`);
+      }
+    });
+  },
+  'oform-save': (el) => saveOutfit(el),
+  'oform-delete': () => deleteOutfitFlow()
 };
 
 /** Giữ lại tên đang gõ trước khi vẽ lại form. */
@@ -1326,10 +1785,11 @@ function bindGlobalEvents() {
       document.getElementById('wardrobe-grid').innerHTML = wardrobeGridHTML();
     }
     if (e.target.id === 'item-name' && S.form) S.form.name = e.target.value;
+    if (e.target.id === 'outfit-name' && S.oform) S.oform.name = e.target.value;
   });
 
   $app.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.target.id === 'item-name' || e.target.id === 'search-input')) {
+    if (e.key === 'Enter' && ['item-name', 'outfit-name', 'search-input'].includes(e.target.id)) {
       e.preventDefault();
       e.target.blur();
     }
@@ -1341,7 +1801,10 @@ function bindGlobalEvents() {
   });
 
   $fab.addEventListener('click', () => {
-    if (parseRoute().name === 'outfit') toast('Tạo outfit sắp ra mắt');
+    const route = parseRoute();
+    if (route.name === 'outfit') navigate('tao-outfit');
+    // Đang xem một danh mục thì outfit mới được chọn sẵn danh mục đó
+    else if (route.name === 'danh-muc') navigate('tao-outfit' + (route.id !== UNCATEGORIZED ? '/' + encodeURIComponent(route.id) : ''));
     else navigate('them');
   });
 
@@ -1362,7 +1825,7 @@ function bindGlobalEvents() {
 
   // Quay lại app sau một thời gian (có thể đã sang ngày mới): vẽ lại trạng thái "Mặc hôm nay".
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && !modalCleanup && !S.form) render();
+    if (document.visibilityState === 'visible' && !modalCleanup && !S.form && !S.oform) render();
   });
 }
 

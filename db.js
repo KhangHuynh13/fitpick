@@ -354,9 +354,159 @@ const DB = (() => {
 
   /* ---------------------------- Outfit ---------------------------- */
 
-  /** Danh sách outfit (giai đoạn 2 sẽ có màn tạo/sửa). */
-  function getOutfits() {
-    return getAll('outfits');
+  /** Danh sách outfit, bộ mới tạo đứng trước. */
+  async function getOutfits() {
+    const outfits = await getAll('outfits');
+    return outfits.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  }
+
+  /** Bỏ id trùng và id rỗng trong một mảng. */
+  function uniqueIds(ids) {
+    return [...new Set((ids || []).filter((x) => typeof x === 'string' && x))];
+  }
+
+  /**
+   * Cập nhật danh mục của outfit, giữ đúng categoryAddedAt:
+   * danh mục mới thêm → ghi thời điểm hiện tại; danh mục bị bỏ → xóa khỏi object;
+   * danh mục giữ nguyên → giữ thời điểm cũ.
+   */
+  function applyCategories(outfit, categoryIds) {
+    const ids = uniqueIds(categoryIds);
+    const old = outfit.categoryAddedAt || {};
+    const addedAt = {};
+    const now = nowISO();
+    ids.forEach((id) => { addedAt[id] = old[id] || now; });
+    outfit.categoryIds = ids;
+    outfit.categoryAddedAt = addedAt;
+  }
+
+  /** Tạo outfit mới. Cần ít nhất 1 món. */
+  async function addOutfit({ name, itemIds, categoryIds }) {
+    const items = uniqueIds(itemIds);
+    if (!items.length) throw new DBError('Hãy chọn ít nhất 1 món cho outfit.');
+    const outfit = {
+      id: newId(),
+      name: String(name || '').trim() || 'Outfit',
+      itemIds: items,
+      categoryIds: [],
+      categoryAddedAt: {},
+      wearCount: 0,
+      lastWornAt: null,
+      previousLastWornAt: null,
+      lastWearItemIds: [],
+      createdAt: nowISO()
+    };
+    applyCategories(outfit, categoryIds);
+    await tx('outfits', 'readwrite', (t) => { t.objectStore('outfits').add(outfit); }, 'Không lưu được outfit.');
+    return outfit;
+  }
+
+  /** Sửa tên, các món và danh mục của outfit (giữ nguyên số lần mặc). */
+  async function updateOutfit(id, { name, itemIds, categoryIds }) {
+    return tx('outfits', 'readwrite', async (t) => {
+      const store = t.objectStore('outfits');
+      const outfit = await reqP(store.get(id));
+      if (!outfit) throw new DBError('Outfit không còn tồn tại.');
+      const items = uniqueIds(itemIds);
+      if (!items.length) throw new DBError('Hãy chọn ít nhất 1 món cho outfit.');
+      outfit.name = String(name || '').trim() || outfit.name;
+      outfit.itemIds = items;
+      // Món bị bỏ khỏi bộ thì cũng không còn được tính trong lần mặc gần nhất
+      outfit.lastWearItemIds = (outfit.lastWearItemIds || []).filter((x) => items.includes(x));
+      applyCategories(outfit, categoryIds);
+      store.put(outfit);
+      return outfit;
+    }, 'Không lưu được outfit.');
+  }
+
+  /** Xóa outfit. Các món đồ trong bộ không bị ảnh hưởng. */
+  function deleteOutfit(id) {
+    return tx('outfits', 'readwrite', (t) => { t.objectStore('outfits').delete(id); }, 'Không xóa được outfit.');
+  }
+
+  /**
+   * Đặt lại danh sách outfit thuộc một danh mục (màn "Thêm outfit vào danh mục").
+   * Outfit được chọn mà chưa có danh mục → thêm (ghi categoryAddedAt);
+   * outfit không được chọn mà đang có → gỡ ra.
+   */
+  async function setCategoryOutfits(categoryId, outfitIds) {
+    const chosen = new Set(outfitIds);
+    return tx('outfits', 'readwrite', async (t) => {
+      const store = t.objectStore('outfits');
+      const outfits = await reqP(store.getAll());
+      let changed = 0;
+      outfits.forEach((o) => {
+        const has = (o.categoryIds || []).includes(categoryId);
+        if (chosen.has(o.id) === has) return;
+        const ids = has ? o.categoryIds.filter((c) => c !== categoryId) : [...(o.categoryIds || []), categoryId];
+        applyCategories(o, ids);
+        store.put(o);
+        changed++;
+      });
+      return changed;
+    }, 'Không cập nhật được danh mục.');
+  }
+
+  /**
+   * "Hôm nay mặc bộ này": outfit +1 và từng món trong bộ +1 theo quy tắc "Mặc hôm nay".
+   * Món đã ghi hôm nay thì bỏ qua. Các món thực sự được cộng lưu vào lastWearItemIds.
+   * Trả về { outfit, addedItems } hoặc null nếu hôm nay đã ghi bộ này rồi.
+   */
+  async function markOutfitWornToday(id) {
+    return tx(['outfits', 'items'], 'readwrite', async (t) => {
+      const outfits = t.objectStore('outfits');
+      const itemsStore = t.objectStore('items');
+      const outfit = await reqP(outfits.get(id));
+      if (!outfit) throw new DBError('Outfit không còn tồn tại.');
+      if (isToday(outfit.lastWornAt)) return null;
+      const now = nowISO();
+      const added = [];
+      for (const itemId of outfit.itemIds || []) {
+        const item = await reqP(itemsStore.get(itemId));
+        if (!item || isToday(item.lastWornAt)) continue;
+        item.previousLastWornAt = item.lastWornAt || null;
+        item.wearCount = (item.wearCount || 0) + 1;
+        item.lastWornAt = now;
+        itemsStore.put(item);
+        added.push(itemId);
+      }
+      outfit.previousLastWornAt = outfit.lastWornAt || null;
+      outfit.wearCount = (outfit.wearCount || 0) + 1;
+      outfit.lastWornAt = now;
+      outfit.lastWearItemIds = added;
+      outfits.put(outfit);
+      return { outfit, addedItems: added.length };
+    }, 'Không ghi được lần mặc.');
+  }
+
+  /**
+   * Hoàn tác "Hôm nay mặc bộ này" — chỉ trong cùng ngày.
+   * Trừ lại outfit và đúng các món trong lastWearItemIds (món nào đã tự bỏ đánh dấu thì bỏ qua).
+   */
+  async function unmarkOutfitWornToday(id) {
+    return tx(['outfits', 'items'], 'readwrite', async (t) => {
+      const outfits = t.objectStore('outfits');
+      const itemsStore = t.objectStore('items');
+      const outfit = await reqP(outfits.get(id));
+      if (!outfit) throw new DBError('Outfit không còn tồn tại.');
+      if (!isToday(outfit.lastWornAt)) throw new DBError('Chỉ bỏ đánh dấu được trong cùng ngày.');
+      let removed = 0;
+      for (const itemId of outfit.lastWearItemIds || []) {
+        const item = await reqP(itemsStore.get(itemId));
+        if (!item || !isToday(item.lastWornAt)) continue;
+        item.wearCount = Math.max(0, (item.wearCount || 0) - 1);
+        item.lastWornAt = item.previousLastWornAt || null;
+        item.previousLastWornAt = null;
+        itemsStore.put(item);
+        removed++;
+      }
+      outfit.wearCount = Math.max(0, (outfit.wearCount || 0) - 1);
+      outfit.lastWornAt = outfit.previousLastWornAt || null;
+      outfit.previousLastWornAt = null;
+      outfit.lastWearItemIds = [];
+      outfits.put(outfit);
+      return { outfit, removedItems: removed };
+    }, 'Không bỏ đánh dấu được.');
   }
 
   /* ---------------------------- Meta ---------------------------- */
@@ -456,6 +606,8 @@ const DB = (() => {
     open, newId, nowISO, dayKey, isToday,
     getCategories, addCategory, renameCategory, reorderCategories, deleteCategory,
     getItems, getItem, addItem, updateItem, markWornToday, unmarkWornToday, deleteItem,
-    getOutfits, getMeta, setMeta, exportAll, importAll
+    getOutfits, addOutfit, updateOutfit, deleteOutfit, setCategoryOutfits,
+    markOutfitWornToday, unmarkOutfitWornToday,
+    getMeta, setMeta, exportAll, importAll
   };
 })();

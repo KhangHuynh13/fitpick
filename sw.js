@@ -7,7 +7,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `fitpick-${CACHE_VERSION}`;
 
 // Danh sách file cần lưu sẵn (đường dẫn tương đối với vị trí sw.js)
