@@ -200,7 +200,6 @@ svg { flex: none; }
   display: flex; align-items: center; justify-content: center;
 }
 .empty p { font-size: 14px; color: var(--muted); line-height: 1.5; max-width: 280px; }
-.soon-pill { padding: 6px 14px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
 
 /* ---------- Nút ---------- */
 .btn {
@@ -490,6 +489,37 @@ svg { flex: none; }
 .pick-row__text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .checkbox { width: 26px; height: 26px; flex: none; border-radius: 8px; border: 1.5px solid #BDB3A2; color: transparent; display: flex; align-items: center; justify-content: center; }
 .pick-row[aria-pressed="true"] .checkbox { border-color: var(--accent); background: var(--accent); color: #FFFFFF; }
+
+/* ---------- Tab Gợi ý ---------- */
+.screen--suggest { gap: 18px; padding-bottom: calc(var(--bottom-ui) + 40px); }
+/* Hàng chip dịp luôn hiển thị khi cuộn */
+.chip-row--sticky {
+  position: sticky; top: var(--safe-top); z-index: 5;
+  margin-top: -10px; padding-top: 10px; padding-bottom: 10px;
+  background: var(--bg);
+}
+.look { margin: 0 16px; background: var(--surface); border-radius: 26px; padding: 12px 12px 10px; display: flex; flex-direction: column; gap: 14px; }
+.look__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 148px; gap: 8px; }
+.look__tile { border-radius: 18px; overflow: hidden; min-width: 0; }
+.look__tile--tall { grid-row: span 2; }
+.look__tile .thumb svg { width: 106px; max-width: 72%; }
+.look__body { padding: 0 6px; display: flex; flex-direction: column; gap: 10px; }
+.look__title { font-family: var(--serif); font-weight: 600; font-size: 28px; line-height: 1.1; }
+.reason-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.reason { padding: 5px 10px; border-radius: 12px; background: #EEF0E6; color: #3F4A2E; font-size: 12px; font-weight: 500; }
+.look__names { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.look__actions { display: flex; gap: 8px; }
+.look__actions .btn { flex: 1; height: 50px; border-radius: 25px; font-size: 14px; font-weight: 600; padding: 0 10px; white-space: nowrap; }
+.look__wear {
+  align-self: center; height: 44px; padding: 0 16px; border: 0; background: transparent;
+  color: var(--accent); font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+}
+.save-tiles { display: flex; gap: 6px; height: 72px; }
+.save-tiles .thumb { flex: 1; min-width: 0; border-radius: 12px; overflow: hidden; }
+.save-tiles .thumb svg { width: 56px; max-width: 80%; }
+.empty--look { padding: 40px 28px 36px; border-radius: 26px; }
+.empty--look .title-md { line-height: 1.15; margin-top: 4px; }
 
 /* ---------- Thông báo nhỏ (toast) ---------- */
 .toast {

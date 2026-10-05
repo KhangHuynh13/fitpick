@@ -447,6 +447,63 @@ const DB = (() => {
   }
 
   /**
+   * "Mặc hôm nay" cho nhiều món cùng lúc (bộ gợi ý chưa lưu thành outfit).
+   * Áp đúng quy tắc của từng món: món đã ghi hôm nay thì bỏ qua.
+   * Dùng chung cơ chế an toàn của bản 1.1.1: sao ảnh vào bộ nhớ, tự thử lại, báo làm mới URL ảnh.
+   * Trả về mảng id các món thực sự được +1.
+   */
+  async function markItemsWornToday(ids) {
+    const added = [];
+    await withRetry(async () => {
+      const images = await snapshotImages(ids);
+      added.length = 0;
+      return tx('items', 'readwrite', async (t) => {
+        const store = t.objectStore('items');
+        const now = nowISO();
+        for (const id of ids) {
+          const item = await reqP(store.get(id));
+          if (!item || isToday(item.lastWornAt)) continue;
+          item.previousLastWornAt = item.lastWornAt || null;
+          item.wearCount = (item.wearCount || 0) + 1;
+          item.lastWornAt = now;
+          useSnapshot(item, images);
+          store.put(item);
+          added.push(id);
+        }
+      }, 'Không ghi được lần mặc.');
+    });
+    notifyItemsWritten(added);
+    return [...added];
+  }
+
+  /**
+   * Hoàn tác "Mặc hôm nay" cho đúng các món đã được +1 (chỉ trong cùng ngày).
+   * Món nào đã được bỏ đánh dấu rồi thì bỏ qua, không báo lỗi. Trả về mảng id đã trừ.
+   */
+  async function unmarkItemsWornToday(ids) {
+    const removed = [];
+    await withRetry(async () => {
+      const images = await snapshotImages(ids);
+      removed.length = 0;
+      return tx('items', 'readwrite', async (t) => {
+        const store = t.objectStore('items');
+        for (const id of ids) {
+          const item = await reqP(store.get(id));
+          if (!item || !isToday(item.lastWornAt)) continue;
+          item.wearCount = Math.max(0, (item.wearCount || 0) - 1);
+          item.lastWornAt = item.previousLastWornAt || null;
+          item.previousLastWornAt = null;
+          useSnapshot(item, images);
+          store.put(item);
+          removed.push(id);
+        }
+      }, 'Không bỏ đánh dấu được.');
+    });
+    notifyItemsWritten(removed);
+    return [...removed];
+  }
+
+  /**
    * Xóa món đồ, gỡ món khỏi các outfit; outfit nào rỗng thì xóa luôn.
    * Trả về { removedFrom, deletedOutfits } để báo cho người dùng.
    */
@@ -742,7 +799,8 @@ const DB = (() => {
     DBError, ITEM_TYPES, DB_VERSION,
     open, newId, nowISO, dayKey, isToday, onItemsWritten,
     getCategories, addCategory, renameCategory, reorderCategories, deleteCategory,
-    getItems, getItem, addItem, updateItem, markWornToday, unmarkWornToday, deleteItem,
+    getItems, getItem, addItem, updateItem, markWornToday, unmarkWornToday,
+    markItemsWornToday, unmarkItemsWornToday, deleteItem,
     getOutfits, addOutfit, updateOutfit, deleteOutfit, setCategoryOutfits,
     markOutfitWornToday, unmarkOutfitWornToday,
     getMeta, setMeta, exportAll, importAll

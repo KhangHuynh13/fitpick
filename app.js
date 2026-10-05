@@ -1,5 +1,5 @@
 /* =========================================================================
-   app.js — Giao diện Fitpick (giai đoạn 1 + 2)
+   app.js — Giao diện Fitpick (giai đoạn 1 + 2 + 3)
    Ứng dụng một trang, điều hướng bằng hash: #/tu-do, #/mon/<id>, #/them,
    #/sua/<id>, #/outfit, #/danh-muc/<id|none>, #/tao-outfit[/<idDanhMục>],
    #/sua-outfit/<id>, #/goi-y, #/cai-dat
@@ -8,7 +8,7 @@
 
 /* ============================ Hằng số ============================ */
 
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2';
 
 // Nhóm loại đồ ở màn Tạo/Sửa outfit (theo thiết kế: Áo · Quần/Váy · Giày · Phụ kiện)
 const OUTFIT_GROUPS = [
@@ -61,6 +61,7 @@ const ICON = {
   phone: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3" stroke-linecap="round"/></svg>',
   share: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1"/></svg>',
   dots: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
+  refresh: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 8A7.5 7.5 0 0 0 5.5 9.5M5 16a7.5 7.5 0 0 0 13.5-1.5"/><path d="M19 3.5V8h-4.5M5 20.5V16h4.5"/></svg>',
   dotsH: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>',
   checkSmall: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   hanger: (s = 28) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6a2 2 0 1 1 2.6 1.9c-.4.1-.6.5-.6.9V10"/><path d="M12 10l-8.6 6.4c-.7.5-.3 1.6.6 1.6h16c.9 0 1.3-1.1.6-1.6L12 10z"/></svg>`,
@@ -83,7 +84,7 @@ const S = {
   outfitMode: 'cat',    // chế độ tab Outfit: 'cat' (Danh mục) | 'all' (Tất cả)
   focusSearch: false,   // cần đặt con trỏ vào ô tìm kiếm sau lần vẽ tới
   routeKey: null,
-  suggestChip: 'all'    // chip dịp đang chọn ở tab Gợi ý (giai đoạn 3)
+  suggestChip: 'all'    // chip dịp đang chọn ở tab Gợi ý
 };
 
 const $app = document.getElementById('app');
@@ -309,7 +310,9 @@ function enterRoute(route) {
   if (route.name === 'them') {
     S.form = {
       mode: 'add', name: '', type: DB.ITEM_TYPES.includes(S.filter) ? S.filter : 'Áo', color: null,
-      categoryIds: [], imageBlob: null, previewURL: null, imageChanged: false, wearCount: 0
+      // Mở từ trạng thái trống của tab Gợi ý (#/them/<idDanhMục>) → chọn sẵn danh mục đó
+      categoryIds: S.categories.some((c) => c.id === route.id) ? [route.id] : [],
+      imageBlob: null, previewURL: null, imageChanged: false, wearCount: 0
     };
   } else if (route.name === 'sua') {
     const item = S.items.find((i) => i.id === route.id);
@@ -1194,24 +1197,271 @@ async function deleteOutfitFlow() {
 
 /* ============================ Tab Gợi ý (giai đoạn 3) ============================ */
 
-/** Tab Gợi ý — chưa làm (giai đoạn 3), chỉ hiện "Sắp ra mắt". */
+/* Trạng thái tab Gợi ý (chỉ trong bộ nhớ, không lưu vào database) */
+const SG = {
+  look: null,          // bộ đang xem: { key, itemIds, accentCount, reasons, chip }
+  reason: '',          // lý do khi không phối được bộ nào
+  shown: new Map(),    // chip → Set khóa các bộ đã gợi ý (để "Đổi bộ khác" không lặp lại)
+  savedOutfitId: null, // id outfit nếu bộ đang xem đã được "Lưu thành outfit"
+  worn: null           // lần "Mặc bộ này hôm nay" gần nhất: { mode: 'items', ids } | { mode: 'outfit', id }
+};
+
+/** Danh mục đang lọc ở tab Gợi ý (null = Tất cả). Danh mục đã bị xóa thì quay về Tất cả. */
+function suggestCategory() {
+  const cat = S.categories.find((c) => c.id === S.suggestChip);
+  if (!cat) S.suggestChip = 'all';
+  return cat || null;
+}
+
+/**
+ * Chọn bộ gợi ý mới cho chip đang chọn, bỏ qua các bộ đã gợi ý.
+ * Trả về true nếu đã xem hết và phải quay vòng lại từ đầu.
+ */
+function pickLook() {
+  const cat = suggestCategory();
+  const { looks, reason } = Suggest.buildLooks({ items: S.items, outfits: S.outfits, categoryId: cat ? cat.id : null });
+  if (!SG.shown.has(S.suggestChip)) SG.shown.set(S.suggestChip, new Set());
+  const shown = SG.shown.get(S.suggestChip);
+  const { look, cycled } = Suggest.nextLook(looks, shown, SG.look && SG.look.key);
+  if (cycled) shown.clear();
+  SG.reason = reason;
+  SG.savedOutfitId = null;
+  SG.worn = null;
+  if (!look) { SG.look = null; return false; }
+  shown.add(look.key);
+  SG.look = {
+    key: look.key, itemIds: look.itemIds, accentCount: look.accentCount, chip: S.suggestChip,
+    reasons: Suggest.reasons(look, cat ? cat.name : null)
+  };
+  return cycled && looks.length > 1;
+}
+
+/** Các món của bộ đang xem (còn tồn tại). */
+function lookItems() {
+  return SG.look ? SG.look.itemIds.map((id) => S.items.find((i) => i.id === id)).filter(Boolean) : [];
+}
+
+/** Bộ đang xem đã được ghi "Mặc bộ này hôm nay" (và chưa hoàn tác) chưa. */
+function lookWorn() {
+  const w = SG.worn;
+  if (!w) return false;
+  const ok = w.mode === 'outfit'
+    ? DB.isToday((S.outfits.find((o) => o.id === w.id) || {}).lastWornAt)
+    : w.ids.some((id) => DB.isToday((S.items.find((i) => i.id === id) || {}).lastWornAt));
+  if (!ok) SG.worn = null; // đã hoàn tác ở nơi khác hoặc đã sang ngày mới
+  return ok;
+}
+
+/** Tên mặc định của bộ gợi ý (dùng cho tiêu đề và hộp "Lưu thành outfit"). */
+function lookTitle() {
+  const cat = suggestCategory();
+  return cat ? `Bộ cho ${cat.name.toLowerCase()}` : 'Bộ gợi ý hôm nay';
+}
+
+/** Tab Gợi ý: chip dịp (sticky), thẻ bộ gợi ý hoặc trạng thái trống. */
 function viewSuggest() {
+  const cat = suggestCategory();
+  // Cần chọn bộ mới khi: lần đầu, đổi chip, hoặc bộ cũ có món đã bị xóa
+  if (!SG.look || SG.look.chip !== S.suggestChip || lookItems().length !== SG.look.itemIds.length) pickLook();
+
   const chips = [{ id: 'all', name: 'Tất cả' }, ...S.categories].map((c) => `
-    <button type="button" class="chip" aria-pressed="${S.suggestChip === c.id}" data-action="suggest-chip" data-value="${esc(c.id)}">${esc(c.name)}</button>`).join('');
-  return `<div class="screen">
+    <button type="button" class="chip chip--filled" aria-pressed="${S.suggestChip === c.id}" data-action="suggest-chip" data-value="${esc(c.id)}">${esc(c.name)}</button>`).join('');
+
+  let body;
+  if (SG.look) {
+    const items = lookItems();
+    const saved = SG.savedOutfitId && S.outfits.some((o) => o.id === SG.savedOutfitId);
+    const worn = lookWorn();
+    const tiles = items.map((i, k) =>
+      `<div class="look__tile${items.length === 3 && k === 0 ? ' look__tile--tall' : ''}">${thumbHTML(i)}</div>`).join('');
+    body = `<article class="look">
+      <div class="look__grid">${tiles}</div>
+      <div class="look__body">
+        <h2 class="look__title">${esc(lookTitle())}</h2>
+        <div class="reason-row">${SG.look.reasons.map((r) => `<span class="reason">${esc(r)}</span>`).join('')}</div>
+        <p class="look__names">${items.map((i) => esc(i.name)).join(' · ')}</p>
+      </div>
+      <div class="look__actions">
+        <button type="button" class="btn" data-action="look-next">${ICON.refresh} Đổi bộ khác</button>
+        <button type="button" class="btn btn--primary" aria-pressed="${!!saved}" data-action="look-save">${saved ? 'Đã lưu outfit' : 'Lưu thành outfit'}</button>
+      </div>
+      <button type="button" class="look__wear" aria-pressed="${worn}" data-action="look-wear">
+        ${worn ? `Đã mặc hôm nay ${ICON.check}` : 'Mặc bộ này hôm nay'}
+      </button>
+    </article>`;
+  } else {
+    const forWhat = cat ? ` cho ${esc(cat.name)}` : '';
+    const hint = cat ? `Thêm món đồ có phong cách ${esc(cat.name)} để nhận gợi ý.` : 'Thêm món đồ để nhận gợi ý.';
+    body = `<div class="empty empty--look">
+      ${EMPTY_LOOK_ART}
+      <h2 class="title-md">Chưa đủ đồ để phối${forWhat}</h2>
+      <p>${esc(S.items.length ? SG.reason : 'Tủ đồ còn trống.')} ${hint}</p>
+      <button type="button" class="btn btn--primary" data-action="go" data-to="${cat ? 'them/' + encodeURIComponent(cat.id) : 'them'}">${ICON.plus(16)} Thêm món đồ</button>
+    </div>`;
+  }
+
+  return `<div class="screen screen--suggest">
     <header class="page-head">
       <div class="page-head__text">
         <span class="eyebrow">Phối từ ${S.items.length} món bạn có</span>
         <h1 class="title-xl">Gợi ý</h1>
       </div>
     </header>
-    <div class="chip-row hs" role="group" aria-label="Chọn dịp">${chips}</div>
-    <div class="empty">
-      <span class="empty__icon">${ICON.sparkle(28)}</span>
-      <span class="soon-pill">Sắp ra mắt</span>
-      <p>Fitpick sẽ gợi ý bộ đồ theo dịp từ chính tủ đồ của bạn, ưu tiên món lâu chưa mặc.</p>
-    </div>
+    <div class="chip-row chip-row--sticky hs" role="group" aria-label="Chọn dịp">${chips}</div>
+    ${body}
   </div>`;
+}
+
+/** Hình minh họa trạng thái trống (theo thiết kế 6c). */
+const EMPTY_LOOK_ART = `<svg width="132" height="104" viewBox="0 0 132 104" fill="none" aria-hidden="true">
+  <circle cx="66" cy="54" r="46" fill="#EFE8DB"/>
+  <path d="M60 30a6 6 0 1 1 7.8 5.7c-1.1.4-1.8 1.4-1.8 2.6V42" stroke="#6B655C" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M66 42L30 66c-2.4 1.6-1.3 5 1.6 5h68.8c2.9 0 4-3.4 1.6-5L66 42z" stroke="#6B655C" stroke-width="2.2" stroke-linejoin="round"/>
+  <path d="M44 78h44" stroke="#CFC6B6" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="4 6"/>
+  <path d="M104 22l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#4E5B3A"/>
+</svg>`;
+
+/** "Đổi bộ khác": chọn bộ tiếp theo chưa gợi ý. */
+function nextLookAction() {
+  hideToastFor('look');
+  const before = SG.look && SG.look.key;
+  const cycled = pickLook();
+  render();
+  if (SG.look && SG.look.key === before) toast('Hiện chỉ phối được 1 bộ cho dịp này — thêm món đồ để có thêm lựa chọn');
+  else if (cycled) toast('Đã xem hết các bộ phối được, bắt đầu lại từ đầu');
+}
+
+/**
+ * "Mặc bộ này hôm nay" / "Đã mặc hôm nay".
+ * - Bộ đã lưu thành outfit → ghi qua outfit (outfit +1 và từng món +1).
+ * - Bộ chưa lưu → ghi từng món theo quy tắc "Mặc hôm nay".
+ * Cả hai đều dùng các hàm ghi đã sửa ở bản 1.1.1 (sao ảnh vào bộ nhớ, thử lại, làm mới URL ảnh).
+ * Khóa 'look' giúp Hoàn tác, nút bấm lại và bấm đúp không chồng nhau.
+ */
+function wearLook() {
+  return exclusive('look', async () => {
+    if (!SG.look) return;
+    if (lookWorn()) {
+      hideToastFor('look'); // bỏ đánh dấu bằng nút → đóng thanh Hoàn tác trước
+      const w = SG.worn;
+      const n = w.mode === 'outfit' ? ((S.outfits.find((o) => o.id === w.id) || {}).lastWearItemIds || []).length : w.ids.length;
+      const ok = await confirmDialog({
+        title: 'Bỏ đánh dấu mặc hôm nay?',
+        text: `${n} món trong bộ sẽ được trừ lại 1 lần mặc` + (w.mode === 'outfit' ? ', outfit cũng được trừ lại.' : '.'),
+        ok: 'Bỏ đánh dấu', cancel: 'Giữ nguyên', center: true
+      });
+      if (ok) await doUnwearLook(w);
+      return;
+    }
+    try {
+      const total = lookItems().length;
+      let w;
+      let added;
+      const savedId = SG.savedOutfitId && S.outfits.some((o) => o.id === SG.savedOutfitId) ? SG.savedOutfitId : null;
+      if (savedId) {
+        const res = await DB.markOutfitWornToday(savedId);
+        if (!res) { await reloadAndRender(); toast('Outfit này đã được ghi hôm nay rồi'); return; }
+        w = { mode: 'outfit', id: savedId };
+        added = res.addedItems;
+      } else {
+        const ids = await DB.markItemsWornToday(SG.look.itemIds);
+        if (!ids.length) { await reloadAndRender(); toast('Các món trong bộ đều đã ghi hôm nay rồi'); return; }
+        w = { mode: 'items', ids };
+        added = ids.length;
+      }
+      SG.worn = w;
+      await reload();
+      render();
+      const skipped = total - added;
+      toast(`Đã ghi lần mặc cho ${added} món` + (skipped > 0 ? ` · ${skipped} món đã ghi hôm nay` : ''), {
+        actionLabel: 'Hoàn tác', duration: 5000, owner: 'look',
+        onAction: () => exclusive('look', () => doUnwearLook(w))
+      });
+    } catch (err) {
+      showError(err, 'Không ghi được lần mặc.');
+      await reloadAndRender();
+    }
+  });
+}
+
+/** Hoàn tác đúng lần "Mặc bộ này hôm nay" `w` (gọi bên trong khóa 'look'). */
+async function doUnwearLook(w) {
+  if (!w) return;
+  try {
+    const res = w.mode === 'outfit' ? await DB.unmarkOutfitWornToday(w.id) : await DB.unmarkItemsWornToday(w.ids);
+    if (SG.worn === w) SG.worn = null;
+    await reload();
+    render();
+    const done = w.mode === 'outfit' ? !!res : res.length > 0;
+    toast(done ? 'Đã bỏ đánh dấu' : 'Bộ này đã được bỏ đánh dấu rồi');
+  } catch (err) {
+    showError(err, 'Không bỏ đánh dấu được.');
+    await reloadAndRender();
+  }
+}
+
+/** "Lưu thành outfit": hộp đặt tên điền sẵn, chọn sẵn danh mục đang lọc. */
+function openSaveLookSheet() {
+  if (!SG.look) return;
+  if (SG.savedOutfitId && S.outfits.some((o) => o.id === SG.savedOutfitId)) {
+    navigate('sua-outfit/' + encodeURIComponent(SG.savedOutfitId)); // đã lưu → mở outfit để xem/sửa
+    return;
+  }
+  const look = SG.look;
+  const chosen = new Set(look.chip !== 'all' ? [look.chip] : []);
+  const items = lookItems();
+  const cats = S.categories.map((c) => `
+    <button type="button" class="chip chip--filled" aria-pressed="${chosen.has(c.id)}" data-cat="${esc(c.id)}">${esc(c.name)}</button>`).join('');
+  const sheet = openModal(`<div class="sheet" role="dialog" aria-labelledby="sl-title" style="gap:16px">
+    <span class="sheet__grip"></span>
+    <div class="sheet__head">
+      <h2 id="sl-title" class="title-md" style="font-size:28px">Lưu thành outfit</h2>
+      <button type="button" class="icon-btn icon-btn--plain" aria-label="Đóng" data-m="close">${ICON.close}</button>
+    </div>
+    <div class="save-tiles">${items.map((i) => thumbHTML(i)).join('')}</div>
+    <div class="field" style="gap:8px">
+      <label for="sl-name" class="label">Tên outfit</label>
+      <input id="sl-name" class="input" style="background:var(--bg)" type="text" maxlength="40" value="${esc(lookTitle())}" autocomplete="off" enterkeyhint="done">
+    </div>
+    <div class="field">
+      <div class="field__head"><span class="label">Danh mục</span><span class="hint">Chọn được nhiều</span></div>
+      <div class="chip-wrap" role="group" aria-label="Danh mục">${cats}</div>
+    </div>
+    <button type="button" class="btn btn--primary btn--lg" data-m="save">Lưu</button>
+  </div>`);
+  const input = sheet.querySelector('#sl-name');
+  const save = sheet.querySelector('[data-m="save"]');
+  input.addEventListener('input', () => { save.disabled = !input.value.trim(); });
+  sheet.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-cat]');
+    if (chip) {
+      const id = chip.dataset.cat;
+      if (chosen.has(id)) chosen.delete(id); else chosen.add(id);
+      chip.setAttribute('aria-pressed', chosen.has(id));
+      return;
+    }
+    const b = e.target.closest('[data-m]');
+    if (!b) return;
+    if (b.dataset.m === 'close') closeModal();
+    if (b.dataset.m === 'save') {
+      exclusive('look', async () => {
+        const name = input.value.trim();
+        if (!name) return;
+        setBusy(save, true, 'Đang lưu…');
+        try {
+          const outfit = await DB.addOutfit({ name, itemIds: look.itemIds, categoryIds: [...chosen] });
+          closeModal();
+          if (SG.look === look) SG.savedOutfitId = outfit.id;
+          await reload();
+          render();
+          toast(`Đã lưu “${name}” vào Outfit`);
+        } catch (err) {
+          setBusy(save, false);
+          showError(err, 'Không lưu được outfit.');
+        }
+      });
+    }
+  });
 }
 
 /* ============================ Màn Cài đặt ============================ */
@@ -1810,7 +2060,10 @@ const ACTIONS = {
       toast(`Đã thêm danh mục “${name}”`);
     }
   }),
-  'suggest-chip': (el) => { S.suggestChip = el.dataset.value; render(); },
+  'suggest-chip': (el) => { hideToastFor('look'); S.suggestChip = el.dataset.value; render(); },
+  'look-next': () => nextLookAction(),
+  'look-save': () => openSaveLookSheet(),
+  'look-wear': () => wearLook(),
 
   // --- Tab Outfit ---
   'outfit-mode': (el) => { S.outfitMode = el.dataset.value; render(); },

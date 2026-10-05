@@ -9,7 +9,7 @@ Lộ trình:
 |---|---|---|
 | 1 | Tủ đồ, thêm/sửa/xem/xóa món đồ, "Mặc hôm nay", Cài đặt (sao lưu, danh mục, thống kê, hướng dẫn cài), nhắc sao lưu | **Đã làm** |
 | 2 | Tab Outfit (danh mục dạng album, tạo/sửa outfit, "Hôm nay mặc bộ này") | **Đã làm** (phiên bản 1.1) |
-| 3 | Tab Gợi ý phối đồ theo luật (không dùng AI) | Chưa làm — tab hiện "Sắp ra mắt" |
+| 3 | Tab Gợi ý phối đồ theo luật (không dùng AI) | **Đã làm** (phiên bản 1.2) |
 
 ---
 
@@ -130,7 +130,7 @@ Màu trung tính (dùng cho gợi ý): Trắng, Đen, Xám, Be, Xanh navy.
 - Không đổi cấu trúc database (vẫn `DB_VERSION = 1`) nên dữ liệu của bản 1.0 được giữ nguyên khi cập nhật.
 - Ảnh có vùng trong suốt được tô nền màu kem `#F7F3EC` trước khi nén JPEG.
 
-## 6. Giai đoạn 3 (chưa làm)
+## 6. Giai đoạn 3 (đã làm — phiên bản 1.2)
 
 Gợi ý phối đồ theo luật, **không dùng AI** (code trong `suggest.js`):
 
@@ -143,3 +143,16 @@ Gợi ý phối đồ theo luật, **không dùng AI** (code trong `suggest.js`)
 - Chip lý do sinh từ các luật trên (ví dụ "Cùng phong cách Đi làm", "Màu trung tính dễ phối", "1 món lâu chưa mặc").
 - Nút **"Đổi bộ khác"**, **"Lưu thành outfit"** (hộp đặt tên điền sẵn và chọn sẵn danh mục đang lọc), **"Mặc bộ này hôm nay"** (áp quy tắc Mặc hôm nay cho từng món).
 - Không đủ món thì hiện trạng thái trống **"Chưa đủ đồ để phối cho [dịp]"** với nút **"Thêm món đồ"**.
+
+### Quyết định triển khai bổ sung (giai đoạn 3)
+
+- Logic gợi ý nằm trong `suggest.js` dưới dạng hàm thuần (không đọc/ghi database, không đụng giao diện) để dễ kiểm thử.
+- Cách chọn bộ: xét tối đa 6 món "lâu chưa mặc" nhất của mỗi nhóm; mỗi tổ hợp áo + quần (hoặc váy/đầm) + giày được thêm túi và phụ kiện lâu chưa mặc nhất (nếu giữ được luật màu). Áo khoác tùy chọn: mỗi tổ hợp có cả bản không áo khoác và bản có áo khoác. Các bộ được xếp theo độ "lâu chưa mặc" trung bình, kèm chút ngẫu nhiên để các bộ ngang điểm lần lượt được gợi ý.
+- "Lâu chưa mặc": từ 14 ngày trở lên. Món chưa có màu được coi là màu trung tính.
+- Chip lý do tối đa 3 (theo thiết kế): "Cùng phong cách …" (khi lọc theo dịp), "Màu trung tính dễ phối" hoặc "Điểm nhấn màu …", và "… chưa mặc lần nào" / "N món lâu chưa mặc".
+- "Đổi bộ khác" không lặp lại bộ đã gợi ý cho chip đó; xem hết thì báo và quay vòng lại. Nếu chỉ phối được 1 bộ thì báo người dùng thêm món đồ.
+- "Lưu thành outfit": tên điền sẵn "Bộ cho <dịp>" (Tất cả: "Bộ gợi ý hôm nay"), chọn sẵn danh mục đang lọc. Sau khi lưu, nút thành "Đã lưu outfit" (bấm để mở outfit). Bộ đã lưu không được gợi ý lại.
+- "Mặc bộ này hôm nay": nếu bộ đã được lưu thành outfit thì ghi qua outfit (outfit +1 và từng món +1, theo quy tắc giai đoạn 2); nếu chưa lưu thì chỉ ghi từng món theo quy tắc "Mặc hôm nay". Hoàn tác (thanh 5 giây hoặc bấm lại nút rồi xác nhận) chỉ trừ đúng các món đã được cộng.
+- Mọi thao tác ghi ở tab Gợi ý dùng lại các hàm đã sửa ở bản 1.1.1 (sao ảnh vào bộ nhớ trước khi ghi, tự thử lại khi lỗi tạm thời, làm mới URL ảnh sau khi ghi), và dùng chung khóa chống chồng thao tác giữa nút Hoàn tác và nút bấm.
+- Trạng thái trống ghi lý do cụ thể (ví dụ "Còn thiếu giày.", "2 món vừa mặc hôm nay hoặc hôm qua nên được để dành."). Nút "Thêm món đồ" mở màn Thêm món với danh mục đang lọc được chọn sẵn.
+- Bộ đang gợi ý chỉ giữ trong bộ nhớ (không lưu vào database); đóng hẳn app thì lần sau gợi ý lại từ đầu.

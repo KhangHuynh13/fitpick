@@ -3,7 +3,7 @@
 Web app quản lý tủ quần áo, dạng PWA dùng trên điện thoại (iPhone và Android).
 Mỗi người tự lưu tủ đồ **trên máy mình** (IndexedDB) — không có server, không có tài khoản.
 
-Yêu cầu đầy đủ và lộ trình 3 giai đoạn: xem [SPEC.md](SPEC.md). Hiện đã làm xong **giai đoạn 1 và 2** (phiên bản 1.1.1, `CACHE_VERSION = 'v3'`).
+Yêu cầu đầy đủ và lộ trình 3 giai đoạn: xem [SPEC.md](SPEC.md). Đã làm xong **cả 3 giai đoạn** (phiên bản 1.2, `CACHE_VERSION = 'v4'`).
 
 ---
 
@@ -68,14 +68,14 @@ Service worker (`sw.js`) lưu sẵn file của app để chạy offline. Mỗi l
 
 1. Mở `sw.js`, tăng số phiên bản:
    ```js
-   const CACHE_VERSION = 'v4';   // trước đó là 'v3'
+   const CACHE_VERSION = 'v5';   // trước đó là 'v4'
    ```
 2. Nếu thêm file mới, thêm đường dẫn vào mảng `APP_FILES` trong `sw.js`.
 3. Đẩy lên GitHub.
 
 Điều gì xảy ra với bạn bè:
 - File HTML luôn lấy từ mạng trước (network-first) nên trình duyệt thấy ngay `sw.js` mới.
-- Service worker mới tải toàn bộ file vào cache `fitpick-v4`, xóa cache cũ `fitpick-v3`.
+- Service worker mới tải toàn bộ file vào cache `fitpick-v5`, xóa cache cũ `fitpick-v4`.
 - App hiện thông báo **"Đã có bản Fitpick mới · Tải lại"**. Bấm là dùng bản mới. Dữ liệu tủ đồ không bị ảnh hưởng.
 
 Quên tăng `CACHE_VERSION` thì bạn bè vẫn dùng CSS/JS cũ đã lưu trong máy.
@@ -85,7 +85,7 @@ Nếu đổi version hiển thị trong Cài đặt, sửa `APP_VERSION` trong `
 ### Dữ liệu của người dùng khi cập nhật
 
 - Tủ đồ nằm trong **IndexedDB**, tách biệt hoàn toàn với cache của service worker. Tăng `CACHE_VERSION` chỉ thay file của app, **không** đụng tới dữ liệu.
-- Chỉ khi đổi cấu trúc database mới cần tăng `DB_VERSION` trong `db.js` (xem mục "Nâng cấp database" bên dưới). Bản 1.1 và 1.1.1 không đổi cấu trúc, vẫn `DB_VERSION = 1`.
+- Chỉ khi đổi cấu trúc database mới cần tăng `DB_VERSION` trong `db.js` (xem mục "Nâng cấp database" bên dưới). Các bản 1.1, 1.1.1 và 1.2 không đổi cấu trúc, vẫn `DB_VERSION = 1`.
 - Không bao giờ đổi tên database (`fitpick`) hay xóa store — làm vậy là mất dữ liệu của bạn bè.
 
 Lịch sử phiên bản:
@@ -95,6 +95,7 @@ Lịch sử phiên bản:
 | 1.0 | v1 | 1 | Giai đoạn 1: Tủ đồ, món đồ, Mặc hôm nay, Cài đặt, sao lưu |
 | 1.1 | v2 | 1 | Giai đoạn 2: tab Outfit; ảnh trong suốt có nền kem |
 | 1.1.1 | v3 | 1 | Sửa 2 lỗi trên iPhone (Safari) — xem bên dưới |
+| 1.2 | v4 | 1 | Giai đoạn 3: tab Gợi ý phối đồ theo luật (chip dịp, chip lý do, Đổi bộ khác, Lưu thành outfit, Mặc bộ này hôm nay, trạng thái trống). Ghi dữ liệu dùng lại cơ chế an toàn của 1.1.1 |
 
 #### Bản 1.1.1 — hai lỗi trên iPhone và cách sửa
 
@@ -119,11 +120,11 @@ Lịch sử phiên bản:
 |---|---|
 | `index.html` | Khung trang, thẻ meta PWA/iPhone, thanh điều hướng |
 | `style.css` | Giao diện (màu, font, bố cục theo `design/`) |
-| `app.js` | Giao diện & điều hướng (`#/tu-do`, `#/mon/<id>`, `#/them`, `#/sua/<id>`, `#/outfit`, `#/danh-muc/<id>`, `#/tao-outfit`, `#/sua-outfit/<id>`, `#/goi-y`, `#/cai-dat`) |
+| `app.js` | Giao diện & điều hướng (`#/tu-do`, `#/mon/<id>`, `#/them`, `#/sua/<id>`, `#/outfit`, `#/danh-muc/<id>`, `#/tao-outfit`, `#/sua-outfit/<id>`, `#/goi-y`, `#/cai-dat`; `#/them/<idDanhMục>` chọn sẵn danh mục) |
 | `db.js` | Thao tác IndexedDB, nâng cấp version database |
 | `image.js` | Thu nhỏ ảnh (cạnh dài ≤ 800px), tô nền kem, nén JPEG 0.8, chuyển base64 |
 | `backup.js` | Xuất / kiểm tra / nhập bản sao lưu |
-| `suggest.js` | Gợi ý phối đồ (giai đoạn 3 — chưa làm) |
+| `suggest.js` | Luật gợi ý phối đồ (hàm thuần, không đọc/ghi database) |
 | `sw.js` | Service worker (offline, cập nhật) |
 | `manifest.json` | Thông tin PWA (tên Fitpick, icon, màu) |
 | `icons/` | Icon app + `make_icons.py` (tạo lại icon bằng Pillow) |
