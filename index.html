@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Fitpick</title>
+  <meta name="description" content="Fitpick — quản lý tủ quần áo trên điện thoại của bạn.">
+  <meta name="theme-color" content="#F7F3EC">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+
+  <!-- iPhone: mở toàn màn hình khi thêm vào màn hình chính -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Fitpick">
+  <meta name="format-detection" content="telephone=no">
+
+  <link rel="preload" href="fonts/be-vietnam-pro-400-vietnamese.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/cormorant-garamond-vietnamese.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app" aria-live="polite">
+    <p class="loading">Đang mở tủ đồ…</p>
+  </main>
+
+  <nav id="tabbar" class="tabbar" aria-label="Điều hướng chính" hidden>
+    <button type="button" class="tab" data-tab="tu-do">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6a2 2 0 1 1 2.6 1.9c-.4.1-.6.5-.6.9V10"/><path d="M12 10l-8.6 6.4c-.7.5-.3 1.6.6 1.6h16c.9 0 1.3-1.1.6-1.6L12 10z"/></svg>
+      <span>Tủ đồ</span>
+    </button>
+    <button type="button" class="tab" data-tab="outfit">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 3.5L4 6l-1.5 4.5 3 1V20h13v-8.5l3-1L20 6l-4.5-2.5c-.6 1.5-2 2.4-3.5 2.4s-2.9-.9-3.5-2.4z"/></svg>
+      <span>Outfit</span>
+    </button>
+    <button type="button" class="fab" id="fab" aria-label="Thêm món đồ mới">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button type="button" class="tab" data-tab="goi-y">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.8 4.7 4.7 1.8-4.7 1.8L11 16l-1.8-4.7L4.5 9.5l4.7-1.8z"/><path d="M18.5 14.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+      <span>Gợi ý</span>
+    </button>
+    <button type="button" class="tab" data-tab="cai-dat">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>
+      <span>Cài đặt</span>
+    </button>
+  </nav>
+
+  <!-- Ô chọn file ẩn: chụp ảnh, chọn ảnh từ thư viện, chọn file sao lưu -->
+  <input type="file" id="input-camera" accept="image/*" capture="environment" class="sr-only" tabindex="-1" aria-hidden="true">
+  <input type="file" id="input-library" accept="image/*" class="sr-only" tabindex="-1" aria-hidden="true">
+  <input type="file" id="input-backup" accept=".json,application/json" class="sr-only" tabindex="-1" aria-hidden="true">
+
+  <div id="toast-root"></div>
+  <div id="modal-root"></div>
+
+  <noscript><p class="loading">Fitpick cần bật JavaScript để chạy.</p></noscript>
+
+  <script src="db.js" defer></script>
+  <script src="image.js" defer></script>
+  <script src="backup.js" defer></script>
+  <script src="suggest.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
